@@ -1,0 +1,30 @@
+name: publish
+
+# Publishes this org.tekfive library to THIS repository\x27s own GitHub Packages registry
+# (maven.pkg.github.com/<owner>/<repo>, resolved automatically from GITHUB_REPOSITORY).
+# No PAT required: the built-in GITHUB_TOKEN can write packages to its own repo.
+#
+# Publish in dependency order across the libs: ack + jfk first, then kviash, then keep, then
+# konnekt (kicd is independent). GitHub Packages release versions are immutable -- bump the
+# library version to republish. Keep the published package PUBLIC so consumers (AIDEWAY and the
+# sibling libs) can resolve it with their own GITHUB_TOKEN.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.5.1"
+      - run: gradle publish --no-daemon -Pgpr.user="${{ github.actor }}" -Pgpr.key="${{ secrets.GITHUB_TOKEN }}"
