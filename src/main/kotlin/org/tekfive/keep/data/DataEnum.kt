@@ -87,6 +87,10 @@ interface DataEnumType<E> : FromJsonObject<E> where E : Enum<E>, E : DataEnum {
     fun mapOptional(id: Int?): E? {
         return dataEnumValues.firstOrNull { it.id == id }
     }
+
+    fun mapOptionalName(name: String?): E? {
+        return dataEnumValues.firstOrNull { it.toString() == name }
+    }
 }
 
 /**
