@@ -1,5 +1,11 @@
 package org.tekfive.keep.paged
 
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.reflect.KClass
+import kotlin.reflect.full.declaredMemberProperties
+import kotlin.reflect.full.isSuperclassOf
+import kotlin.reflect.jvm.javaField
+import kotlin.reflect.jvm.javaGetter
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ColumnSet
 import org.jetbrains.exposed.v1.core.Expression
@@ -7,6 +13,7 @@ import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.StringColumnType
+import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -51,7 +58,7 @@ abstract class PagedQuery(
     protected fun returnColumn(column: Column<*>) {
         // The column itself is the sort expression, so `sort=<jsonName>:asc`
         // requests resolve against every returned table column.
-        columns.add(PagedColumn(column.name.toJsonPropertyName(), sortExpression = column) { it[column] })
+        columns.add(PagedColumn(column.jsonPropertyName(), sortExpression = column) { it[column] })
     }
 
     protected fun returnColumn(
@@ -173,5 +180,65 @@ abstract class PagedQuery(
                 }
             }
             .joinToString("")
+    }
+
+    /**
+     * The automatic JSON property name for a returned column: the name of the Kotlin property
+     * on the column's table object that holds this column (so `val environment =
+     * dataEnum<ServiceEnvironment>("environment_id")` serializes as `environment`, matching the
+     * Data class property). Falls back to camelCasing the column name when the column has no
+     * property mapping — non-singleton tables (aliases, runtime-built tables) and columns
+     * registered outside a property.
+     */
+    private fun Column<*>.jsonPropertyName(): String {
+        return propertyNameFor(this) ?: name.toJsonPropertyName()
+    }
+
+    companion object {
+        /** Per-table-class cache of column → Kotlin property name (tables are singleton objects). */
+        private val tableColumnProperties = ConcurrentHashMap<KClass<*>, Map<Column<*>, String>>()
+
+        private fun propertyNameFor(column: Column<*>): String? {
+            val tableClass = column.table::class
+            // Only singleton `object` tables have a stable class↔instance mapping to cache.
+            // Aliases and runtime-built tables fall back to name derivation.
+            if (tableClass.objectInstance == null) return null
+            val properties = tableColumnProperties.computeIfAbsent(tableClass) {
+                collectColumnProperties(column.table)
+            }
+            return properties[column]
+        }
+
+        /**
+         * Maps each [Column] instance held by a `val`/`var` on [table] to its property name,
+         * walking the class hierarchy from the table object up to (but not including) Exposed's
+         * [Table]. Stopping there excludes Exposed's own column-typed helpers (e.g.
+         * `autoIncColumn`), which alias real columns under the wrong name. Underscore-prefixed
+         * backing properties (e.g. `_state`) map to the stripped name; the most-derived
+         * declaration wins.
+         */
+        private fun collectColumnProperties(table: Table): Map<Column<*>, String> {
+            val result = HashMap<Column<*>, String>()
+            var current: KClass<*>? = table::class
+            while (current != null && current != Table::class && current != Any::class) {
+                for (prop in current.declaredMemberProperties) {
+                    // Filter by declared return type BEFORE calling the getter to avoid triggering
+                    // Exposed internals (e.g. Table.ddl) that require a transaction context.
+                    val classifier = prop.returnType.classifier
+                    if (classifier !is KClass<*> || !Column::class.isSuperclassOf(classifier)) continue
+                    val value = try {
+                        // @JvmField properties have no Java getter — read the field directly.
+                        if (prop.javaGetter == null) prop.javaField?.get(table) else prop.getter.call(table)
+                    } catch (ignored: Exception) {
+                        null
+                    } as? Column<*> ?: continue
+                    result.putIfAbsent(value, prop.name.removePrefix("_"))
+                }
+                current = current.supertypes
+                    .mapNotNull { it.classifier as? KClass<*> }
+                    .firstOrNull { Table::class.isSuperclassOf(it) }
+            }
+            return result
+        }
     }
 }

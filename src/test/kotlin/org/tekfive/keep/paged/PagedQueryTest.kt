@@ -20,7 +20,7 @@ class PagedQueryTest {
         TestDatabase.connect()
         transaction {
             SchemaUtils.create(PagedQueryTestTable)
-            PagedQueryTestTable.create(PagedQueryTestData("workflow", 42))
+            PagedQueryTestTable.create(PagedQueryTestData("workflow", 42, 7))
         }
     }
 
@@ -40,21 +40,34 @@ class PagedQueryTest {
         assertFalse(row.containsKey("resource_type_id"))
     }
 
+    @Test
+    fun `automatic naming uses the table property name over the column name`() {
+        val json = transaction { PagedQueryTestQuery(parameters()).execute() }
+        val row = json.reqArray("data")[0].reqObj
+
+        // The column is named environment_id but the table property is `environment` —
+        // the property name wins so the JSON matches the Data class.
+        assertEquals(7, row["environment"].reqInt)
+        assertFalse(row.containsKey("environmentId"))
+    }
+
     private fun parameters(raw: Map<String, List<String>> = emptyMap()): HttpRequestParameters {
         return HttpRequestParameters({ raw }, DefaultKviashConfiguration)
     }
 }
 
-class PagedQueryTestData(val resourceType: String, val resourceTypeId: Int) : Data()
+class PagedQueryTestData(val resourceType: String, val resourceTypeId: Int, val environment: Int) : Data()
 
 object PagedQueryTestTable : DataTable<PagedQueryTestData>("paged_query_test") {
     val resourceType = varchar("resource_type", 64)
     val resourceTypeId = integer("resource_type_id")
+    val environment = integer("environment_id")
 }
 
 class PagedQueryTestQuery(parameters: HttpRequestParameters) : PagedQuery(PagedQueryTestTable, parameters) {
     init {
         returnColumn(PagedQueryTestTable.resourceType)
         returnColumn(PagedQueryTestTable.resourceTypeId)
+        returnColumn(PagedQueryTestTable.environment)
     }
 }
