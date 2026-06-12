@@ -49,14 +49,16 @@ abstract class PagedQuery(
     }
 
     protected fun returnColumn(column: Column<*>) {
-        columns.add(PagedColumn(column.name.toJsonPropertyName()) { it[column] } )
+        // The column itself is the sort expression, so `sort=<jsonName>:asc`
+        // requests resolve against every returned table column.
+        columns.add(PagedColumn(column.name.toJsonPropertyName(), sortExpression = column) { it[column] })
     }
 
     protected fun returnColumn(
         name: String,
         column: Expression<*>
     ) {
-        columns.add(PagedColumn(name) { it[column] } )
+        columns.add(PagedColumn(name, sortExpression = column) { it[column] })
     }
 
     protected fun returnColumn(
