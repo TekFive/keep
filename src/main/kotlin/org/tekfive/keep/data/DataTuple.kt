@@ -264,6 +264,16 @@ abstract class DataTuple<D : Data>(
         return db { selectAll().where(predicate).singleOrNull()?.let { map(it) } }
     }
 
+    fun findAll(vararg order: Pair<Expression<*>, SortOrder>): List<D> {
+        return db {
+            var query = selectAll()
+            if (order.isNotEmpty()) {
+                query = query.orderBy(*order)
+            }
+            query.map(::map)
+        }
+    }
+
     fun findWhere(predicate: Op<Boolean>, vararg order: Pair<Expression<*>, SortOrder>): List<D> {
         return db {
             var query = selectAll().where(predicate)
