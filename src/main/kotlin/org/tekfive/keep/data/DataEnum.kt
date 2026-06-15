@@ -7,6 +7,8 @@ import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.Table
 import org.tekfive.jfk.FromJsonObject
 import org.tekfive.jfk.JsonObject
+import org.tekfive.jfk.JsonString
+import org.tekfive.jfk.JsonValue
 import org.tekfive.jfk.ToJsonObject
 import org.tekfive.jfk.json
 import org.tekfive.keep.array.ArrayOverlapOp
@@ -67,6 +69,18 @@ interface DataEnumType<E> : FromJsonObject<E> where E : Enum<E>, E : DataEnum {
 
     val enumType: KClass<E>
         get() = dataEnumValues[0].javaClass.kotlin
+
+    fun fromJsonValue(json: JsonValue): E {
+        val value = if (json is JsonString) {
+            dataEnumValues.firstOrNull { it.name == json.string }
+        } else if (json is JsonObject) {
+            fromJson(json)
+        } else {
+            null
+        }
+
+        return value ?: throw IllegalArgumentException("Unsupported json type: $json")
+    }
 
     override fun fromJson(json: JsonObject): E {
         val id = json["id"].reqInt
