@@ -35,7 +35,7 @@ interface DataEnum : ToJsonObject {
             "id" set id
             "name" set name
             "displayName" set displayName
-        }
+        } + additionalJsonValues()
     }
 
     companion object {
