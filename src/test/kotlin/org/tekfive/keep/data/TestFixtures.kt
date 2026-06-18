@@ -1,5 +1,7 @@
 package org.tekfive.keep.data
 
+import org.tekfive.keep.array.setArray
+
 // ---------------------------------------------------------------------------
 // Shared test Data classes and DataTable definitions.
 // ---------------------------------------------------------------------------
@@ -87,6 +89,22 @@ object TaggedTable : DataTable<TaggedData>("tagged") {
     val priorities = dataEnumList<Priority>("priority_ids")
 }
 
+// -- Set array scenarios ------------------------------------------------------
+
+class TaggedSetData(val label: String, var priorities: Set<Priority>) : Data()
+
+object TaggedSetTable : DataTable<TaggedSetData>("tagged_set") {
+    val label = varchar("label", 255)
+    val priorities = dataEnumSet<Priority>("priority_ids")
+}
+
+class StringSetData(val label: String, var tags: Set<String>) : Data()
+
+object StringSetTable : DataTable<StringSetData>("string_set") {
+    val label = varchar("label", 255)
+    val tags = setArray<String>("tags")
+}
+
 // -- DataView scenario --------------------------------------------------------
 
 class SimpleViewData(val name: String, var score: Int) : Data()
@@ -110,6 +128,13 @@ object NoteTable : DataTable<NoteData>("notes") {
 class NullableListData(val name: String, var tags: List<String>) : Data()
 
 object NullableListTable : DataTable<NullableListData>("nullable_list") {
+    val name = varchar("name", 255)
+    val tags = text("tags").nullable()
+}
+
+class NullableSetData(val name: String, var tags: Set<String>) : Data()
+
+object NullableSetTable : DataTable<NullableSetData>("nullable_set") {
     val name = varchar("name", 255)
     val tags = text("tags").nullable()
 }

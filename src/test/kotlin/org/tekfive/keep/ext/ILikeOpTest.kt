@@ -3,6 +3,7 @@ package org.tekfive.keep.ext
 import org.jetbrains.exposed.v1.core.LikePattern
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.VarCharColumnType
+import org.tekfive.keep.array.setArray
 import org.tekfive.keep.text.ArrayToStringOp
 import org.tekfive.keep.text.ILikeEscapeOp
 import org.tekfive.keep.text.arrayILike
@@ -17,6 +18,7 @@ private object ILikeTestTable : Table("ilike_test") {
     val name = varchar("name", 100)
     val description = text("description").nullable()
     val tags = array<String>("tags", VarCharColumnType(100))
+    val tagSet = setArray("tag_set", VarCharColumnType(100))
     val aliases = array<String>("aliases", VarCharColumnType(100)).nullable()
 }
 
@@ -108,6 +110,13 @@ class ILikeOpTest {
     @Test
     fun `arrayILike works on nullable array columns`() {
         val op = ILikeTestTable.aliases arrayILike "search"
+        assertIs<ILikeEscapeOp>(op)
+        assertIs<ArrayToStringOp>(op.expr1)
+    }
+
+    @Test
+    fun `arrayILike works on set array columns`() {
+        val op = ILikeTestTable.tagSet arrayILike "search"
         assertIs<ILikeEscapeOp>(op)
         assertIs<ArrayToStringOp>(op.expr1)
     }

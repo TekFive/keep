@@ -35,8 +35,8 @@ class ArrayOverlapOp(
  * contains any of [values].
  */
 @JvmName("intersectsInt")
-infix fun ExpressionWithColumnType<out List<Int>?>.intersects(values: List<Int>): Op<Boolean> {
-    return ArrayOverlapOp(this, values, "integer")
+infix fun ExpressionWithColumnType<out Collection<Int>?>.intersects(values: Collection<Int>): Op<Boolean> {
+    return ArrayOverlapOp(this, values.toList(), "integer")
 }
 
 /**
@@ -44,6 +44,6 @@ infix fun ExpressionWithColumnType<out List<Int>?>.intersects(values: List<Int>)
  * contains any of [values].
  */
 @JvmName("intersectsLong")
-infix fun ExpressionWithColumnType<out List<Long>?>.intersects(values: List<Long>): Op<Boolean> {
-    return ArrayOverlapOp(this, values, "bigint")
+infix fun ExpressionWithColumnType<out Collection<Long>?>.intersects(values: Collection<Long>): Op<Boolean> {
+    return ArrayOverlapOp(this, values.toList(), "bigint")
 }

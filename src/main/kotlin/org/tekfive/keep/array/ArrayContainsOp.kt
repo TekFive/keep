@@ -35,19 +35,19 @@ class ArrayContainsOp<T>(
  *
  * Usage: `WorkflowRevisionTable.serviceReferences includes serviceId`
  */
-infix fun ExpressionWithColumnType<out List<Long>?>.includes(value: Long): Op<Boolean> =
+infix fun ExpressionWithColumnType<out Collection<Long>?>.includes(value: Long): Op<Boolean> =
     ArrayContainsOp(this, value, "bigint")
 
 /**
  * Returns true when [value] is contained in this array column.
  */
-infix fun ExpressionWithColumnType<out List<Int>?>.includes(value: Int): Op<Boolean> =
+infix fun ExpressionWithColumnType<out Collection<Int>?>.includes(value: Int): Op<Boolean> =
     ArrayContainsOp(this, value, "integer")
 
 /**
  * Returns true when [value] is contained in this array column.
  */
-infix fun ExpressionWithColumnType<out List<String>?>.includes(value: String): Op<Boolean> =
+infix fun ExpressionWithColumnType<out Collection<String>?>.includes(value: String): Op<Boolean> =
     ArrayContainsOp(this, value, "text")
 
 private fun resolveColumnType(sqlType: String): org.jetbrains.exposed.v1.core.IColumnType<out Any> {

@@ -188,6 +188,27 @@ class DataTableTest {
     }
 
     @Test
+    fun `empty set maps to null on nullable column`() {
+        val data = NullableSetData("alice", emptySet())
+        val mapper = TestColumnValueMapper()
+
+        NullableSetTable.mapColumns(data, mapper, insert = true)
+
+        assertEquals("alice", mapper.values[NullableSetTable.name])
+        assertEquals(null, mapper.values[NullableSetTable.tags])
+    }
+
+    @Test
+    fun `non-empty set maps normally on nullable column`() {
+        val data = NullableSetData("bob", setOf("a", "b"))
+        val mapper = TestColumnValueMapper()
+
+        NullableSetTable.mapColumns(data, mapper, insert = true)
+
+        assertEquals(setOf("a", "b"), mapper.values[NullableSetTable.tags])
+    }
+
+    @Test
     fun `empty list on non-nullable column maps as empty list`() {
         val data = TaggedData("alice", emptyList())
         val mapper = TestColumnValueMapper()

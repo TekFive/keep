@@ -60,7 +60,7 @@ abstract class DataTable<D : Data>(
         if (column != null) {
             @Suppress("UNCHECKED_CAST")
             val value = (prop as KProperty1<D, *>).get(data)
-            val mapped = if (value is List<*> && value.isEmpty() && column.columnType.nullable) null else value
+            val mapped = if (value is Collection<*> && value.isEmpty() && column.columnType.nullable) null else value
             @Suppress("UNCHECKED_CAST")
             statement[column as Column<Any?>] = mapped
         } else {

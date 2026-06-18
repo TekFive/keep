@@ -75,7 +75,7 @@ infix fun <T : String?> ExpressionWithColumnType<T>.ilike(pattern: LikePattern):
  *
  * Usage: `TalentsTable.emailAddresses arrayILike "john"` — matches any email containing "john"
  */
-infix fun <T : List<String>?> ExpressionWithColumnType<T>.arrayILike(pattern: String): ILikeEscapeOp =
+infix fun <T : Collection<String>?> ExpressionWithColumnType<T>.arrayILike(pattern: String): ILikeEscapeOp =
     ILikeEscapeOp(ArrayToStringOp(this), stringParam(toILikePattern(pattern)), escapeChar = null)
 
 /**

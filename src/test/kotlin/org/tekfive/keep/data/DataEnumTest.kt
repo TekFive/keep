@@ -19,14 +19,14 @@ class DataEnumTest {
     fun setup() {
         TestDatabase.connect()
         transaction {
-            SchemaUtils.create(TaskTable, TaggedTable)
+            SchemaUtils.create(TaskTable, TaggedTable, TaggedSetTable)
         }
     }
 
     @AfterTest
     fun teardown() {
         transaction {
-            SchemaUtils.drop(TaggedTable, TaskTable)
+            SchemaUtils.drop(TaggedSetTable, TaggedTable, TaskTable)
         }
     }
 
@@ -126,6 +126,34 @@ class DataEnumTest {
 
             val row = TaggedTable.selectAll().where { TaggedTable.id eq data.id }.single()
             val loaded = TaggedTable.map(row)
+
+            assertTrue(loaded.priorities.isEmpty())
+        }
+    }
+
+    // -- enumSet --------------------------------------------------------------
+
+    @Test
+    fun `enumSet stores and retrieves set of enums`() {
+        transaction {
+            val data = TaggedSetData("test", linkedSetOf(Priority.LOW, Priority.HIGH))
+            TaggedSetTable.create(data)
+
+            val row = TaggedSetTable.selectAll().where { TaggedSetTable.id eq data.id }.single()
+            val loaded = TaggedSetTable.map(row)
+
+            assertEquals(setOf(Priority.LOW, Priority.HIGH), loaded.priorities)
+        }
+    }
+
+    @Test
+    fun `enumSet handles empty set`() {
+        transaction {
+            val data = TaggedSetData("empty", emptySet())
+            TaggedSetTable.create(data)
+
+            val row = TaggedSetTable.selectAll().where { TaggedSetTable.id eq data.id }.single()
+            val loaded = TaggedSetTable.map(row)
 
             assertTrue(loaded.priorities.isEmpty())
         }

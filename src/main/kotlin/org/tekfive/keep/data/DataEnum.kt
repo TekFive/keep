@@ -12,6 +12,7 @@ import org.tekfive.jfk.JsonValue
 import org.tekfive.jfk.ToJsonObject
 import org.tekfive.jfk.json
 import org.tekfive.keep.array.ArrayOverlapOp
+import org.tekfive.keep.array.setArray
 import java.lang.reflect.ParameterizedType
 import kotlin.reflect.KClass
 
@@ -176,6 +177,11 @@ inline fun <reified E> Table.dataEnumList(name: String): Column<List<E>> where E
     return array(name, DataEnumColumnType(enumValues<E>()))
 }
 
+/** Registers an INTEGER[] array column that stores a set of [DataEnum] enums by their ids. */
+inline fun <reified E> Table.dataEnumSet(name: String): Column<Set<E>> where E : Enum<E>, E : DataEnum {
+    return setArray(name, DataEnumColumnType(enumValues<E>()))
+}
+
 /**
  * PostgreSQL array overlap — checks if the enum-list column contains any of the given values.
  *
@@ -183,6 +189,6 @@ inline fun <reified E> Table.dataEnumList(name: String): Column<List<E>> where E
  *
  * Usage: `TalentsTable.workArrangements enumIntersects listOf(WorkArrangement.REMOTE)`
  */
-infix fun <E> ExpressionWithColumnType<out List<E>?>.enumIntersects(values: List<E>): Op<Boolean>
+infix fun <E> ExpressionWithColumnType<out Collection<E>?>.enumIntersects(values: Collection<E>): Op<Boolean>
     where E : Enum<E>, E : DataEnum =
     ArrayOverlapOp(this, values.map { it.id })

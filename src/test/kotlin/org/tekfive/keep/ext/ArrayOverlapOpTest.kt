@@ -7,9 +7,11 @@ import org.jetbrains.exposed.v1.core.QueryBuilder
 import org.jetbrains.exposed.v1.core.Table
 import org.tekfive.keep.array.ArrayOverlapOp
 import org.tekfive.keep.array.intersects
+import org.tekfive.keep.array.setArray
 import org.tekfive.keep.data.enumIntersects
 import org.tekfive.keep.data.DataEnum
 import org.tekfive.keep.data.dataEnumList
+import org.tekfive.keep.data.dataEnumSet
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -22,8 +24,10 @@ private enum class Priority(override val id: Int, override val displayName: Stri
 
 private object OverlapTestTable : Table("overlap_test") {
     val priorities = dataEnumList<Priority>("priority_ids")
+    val prioritySet = dataEnumSet<Priority>("priority_set_ids")
     val optionalPriorities = dataEnumList<Priority>("optional_priority_ids").nullable()
     val counts = array<Int>("counts")
+    val countSet = setArray<Int>("count_set")
     val referenceIds = array<Long>("reference_ids")
     val optionalReferenceIds = array<Long>("optional_reference_ids").nullable()
 }
@@ -56,6 +60,12 @@ class ArrayOverlapOpTest {
     }
 
     @Test
+    fun `enumIntersects works on set columns`() {
+        val op = OverlapTestTable.prioritySet enumIntersects setOf(Priority.LOW, Priority.HIGH)
+        assertIs<ArrayOverlapOp>(op)
+    }
+
+    @Test
     fun `enumIntersects works on nullable columns`() {
         val op = OverlapTestTable.optionalPriorities enumIntersects listOf(Priority.MEDIUM)
         assertIs<ArrayOverlapOp>(op)
@@ -64,6 +74,12 @@ class ArrayOverlapOpTest {
     @Test
     fun `int intersects produces ArrayOverlapOp`() {
         val op = OverlapTestTable.counts intersects listOf(2, 5)
+        assertIs<ArrayOverlapOp>(op)
+    }
+
+    @Test
+    fun `int intersects works on set columns`() {
+        val op = OverlapTestTable.countSet intersects setOf(2, 5)
         assertIs<ArrayOverlapOp>(op)
     }
 
@@ -80,8 +96,20 @@ class ArrayOverlapOpTest {
     }
 
     @Test
+    fun `enumIntersects renders set enum ids with an integer array cast`() {
+        val op = StubColumn<Set<Priority>>("priority_ids") enumIntersects setOf(Priority.LOW, Priority.HIGH)
+        assertEquals("priority_ids && ARRAY[1,3]::integer[]", renderSql(op))
+    }
+
+    @Test
     fun `int intersects renders an integer array cast`() {
         val op = StubColumn<List<Int>>("counts") intersects listOf(2, 5)
+        assertEquals("counts && ARRAY[2,5]::integer[]", renderSql(op))
+    }
+
+    @Test
+    fun `int intersects renders set values with an integer array cast`() {
+        val op = StubColumn<Set<Int>>("counts") intersects setOf(2, 5)
         assertEquals("counts && ARRAY[2,5]::integer[]", renderSql(op))
     }
 
