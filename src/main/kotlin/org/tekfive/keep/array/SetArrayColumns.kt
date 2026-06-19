@@ -3,8 +3,7 @@ package org.tekfive.keep.array
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ColumnType
 import org.jetbrains.exposed.v1.core.Table
-import org.jetbrains.exposed.v1.core.array
-import org.jetbrains.exposed.v1.core.transform
+import org.jetbrains.exposed.v1.core.Table.Dual.transform
 
 /**
  * Registers a PostgreSQL array column exposed as a [Set].
