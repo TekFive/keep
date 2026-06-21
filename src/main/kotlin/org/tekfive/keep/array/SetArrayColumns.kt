@@ -3,7 +3,6 @@ package org.tekfive.keep.array
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ColumnType
 import org.jetbrains.exposed.v1.core.Table
-import org.jetbrains.exposed.v1.core.Table.Dual.transform
 
 /**
  * Registers a PostgreSQL array column exposed as a [Set].
@@ -23,8 +22,10 @@ fun <E : Any> Table.setArray(name: String, columnType: ColumnType<E>): Column<Se
 }
 
 fun <E : Any> Column<List<E>>.asSetColumn(): Column<Set<E>> {
-    return transform(
-        wrap = { values -> values.toSet() },
-        unwrap = { values -> values.toList() },
-    )
+    return with(table) {
+        this@asSetColumn.transform(
+            wrap = { values -> values.toSet() },
+            unwrap = { values -> values.toList() },
+        )
+    }
 }
