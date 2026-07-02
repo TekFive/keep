@@ -50,7 +50,7 @@ abstract class BaseAckJobConfiguration() : JobConfiguration {
         val minSecondsBetweenJobCheckinProperty = Ack.int("JOB_MIN_SECONDS_BETWEEN_JOB_CHECKIN", BaseJobConfiguration.DEFAULT_MIN_SECONDS_BETWEEN_JOB_CHECKIN, description = "Minimum seconds between job check-ins while running.")
         val defaultJobTimeoutSecondsProperty = Ack.int("JOB_DEFAULT_TIMEOUT_SECONDS", BaseJobConfiguration.DEFAULT_JOB_TIMEOUT_SECONDS, description = "Default job execution timeout in seconds.")
         val defaultMinSecondsBetweenJobRetryProperty = Ack.int("JOB_DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY", BaseJobConfiguration.DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY, description = "Default minimum seconds between job retries.")
-        val minSaveLogLevelProperty = Ack.string("JOB_MIN_SAVE_LOG_LEVEL", description = "Minimum log level persisted for job execution logs.")
+        val minSaveLogLevelProperty = Ack.string("JOB_MIN_SAVE_LOG_LEVEL", default = JobRecordLogLevel.INFO.toString(), description = "Minimum log level persisted for job execution logs.")
     }
 }
 
