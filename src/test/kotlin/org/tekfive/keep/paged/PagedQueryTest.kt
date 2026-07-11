@@ -51,6 +51,14 @@ class PagedQueryTest {
         assertFalse(row.containsKey("environmentId"))
     }
 
+    @Test
+    fun `page numbers below one are coerced to the first page`() {
+        val json = transaction { PagedQueryTestQuery(parameters(mapOf("page" to listOf("-5")))).execute() }
+
+        assertEquals(1, json["page"].reqInt)
+        assertEquals(1, json.reqArray("data").size)
+    }
+
     private fun parameters(raw: Map<String, List<String>> = emptyMap()): HttpRequestParameters {
         return HttpRequestParameters({ raw }, DefaultKviashConfiguration)
     }

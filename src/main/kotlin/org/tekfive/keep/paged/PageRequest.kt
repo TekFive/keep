@@ -21,7 +21,7 @@ data class PageRequest(
         val maxPageSizeAck = Ack.int("MAX_PAGE_SIZE", 100, description = "Maximum allowed page size for paged queries.")
 
         fun from(parameters: HttpRequestParameters, defaultSize: Int = defaultPageSizeAck()): PageRequest {
-            val page = parameters.getInt("page") ?: 1
+            val page = (parameters.getInt("page") ?: 1).coerceAtLeast(1)
 
             val minPageSize = minPageSizeAck()
             val maxPageSize = maxPageSizeAck()
