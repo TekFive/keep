@@ -44,14 +44,14 @@ dependencies {
     api("org.jetbrains.exposed:exposed-json:1.1.1")
     api("com.zaxxer:HikariCP:7.0.2")
     api("com.google.crypto.tink:tink:1.17.0")
-    api("org.bouncycastle:bcprov-jdk18on:1.80")
+    api("org.bouncycastle:bcprov-jdk18on:1.84")
     api("org.tekfive:jfk:1.0.0")
     api("org.tekfive:ack:1.0.0")
     api("org.tekfive:kviash:1.0.0")
 
-    compileOnly("org.postgresql:postgresql:42.7.9")
+    compileOnly("org.postgresql:postgresql:42.7.11")
 
-    testImplementation("org.postgresql:postgresql:42.7.9")
+    testImplementation("org.postgresql:postgresql:42.7.11")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation(kotlin("test-junit5"))
     testImplementation("org.slf4j:slf4j-simple:2.0.16")
