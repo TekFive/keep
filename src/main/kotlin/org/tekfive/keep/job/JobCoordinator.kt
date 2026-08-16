@@ -16,6 +16,7 @@ class JobCoordinator(
 
     val configuration: JobConfiguration = JobConfigurationGuard(configuration)
 
+    @Volatile
     private var coordinationThread: Thread? = null
 
     private val candidateQueue = LinkedBlockingQueue<Pair<Long, JobSpec>>()
@@ -33,7 +34,11 @@ class JobCoordinator(
 
     fun start() {
         if (coordinationThread?.let { it.isAlive } != true) {
-            coordinationThread = Thread(this, "Job Coordinator").apply { start() }
+            val thread = Thread(this, "Job Coordinator")
+            // run() uses coordinationThread as its ownership token, so publish it before the
+            // new thread can evaluate the loop condition.
+            coordinationThread = thread
+            thread.start()
         }
     }
 
