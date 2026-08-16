@@ -101,6 +101,16 @@ class AppSchemaTest {
     }
 
     @Test
+    fun `AppSchema exposes the KeepSchema contract`() {
+        val keepSchema: KeepSchema = TestSchema
+
+        assertEquals("public", keepSchema.schemaName)
+        assertEquals(TestSchema.tables, keepSchema.tables)
+        assertEquals(TestSchema.sequences, keepSchema.sequenceNames)
+        assertTrue(keepSchema.views.isEmpty())
+    }
+
+    @Test
     fun `create and use multiple tables`() {
         transaction {
             TestSchema.create()

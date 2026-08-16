@@ -37,6 +37,7 @@ dependencies {
     api("org.slf4j:slf4j-api:2.0.16")
     api("org.jetbrains.exposed:exposed-jdbc:1.4.0")
     api("org.jetbrains.exposed:exposed-json:1.4.0")
+    implementation("org.jetbrains.exposed:exposed-migration-jdbc:1.4.0")
     api("com.zaxxer:HikariCP:7.0.2")
     api("com.google.crypto.tink:tink:1.17.0")
     api("org.bouncycastle:bcprov-jdk18on:1.84")

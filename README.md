@@ -158,6 +158,40 @@ val query = WorkflowRevisionsTable
 
 Schema helpers also provide common timestamp, active, description, foreign-key, and unique-constraint conventions.
 
+### PostgreSQL Migration Generation
+
+`PostgresMigrationGenerator` compares a `KeepSchema` with an existing PostgreSQL schema. It produces a reviewable SQL file without applying it to the database.
+
+```kotlin
+object ApplicationSchema : KeepSchema("public") {
+    override val tables = listOf(UsersTable, OrdersTable)
+    override val views = listOf(
+        PostgresViewDefinition(
+            name = "active_users",
+            query = "SELECT id, email FROM users WHERE active",
+        )
+    )
+    override val sequenceNames = listOf("order_number_seq")
+}
+
+val plan = PostgresMigrationGenerator.generate(
+    database = database,
+    keepSchema = ApplicationSchema,
+    output = Path.of("migrations/V12__synchronize_schema.sql"),
+    nonDestructive = true,
+)
+
+plan.suppressedStatements.forEach {
+    println("Suppressed ${it.reason}: ${it.sql}")
+}
+```
+
+`KeepSchema` is authoritative for its PostgreSQL schema. Destructive mode can remove ordinary tables, views, materialized views, standalone sequences, and columns not declared by it. PostgreSQL-owned sequences for serial and identity columns remain managed by their tables.
+
+With `nonDestructive = true`, KEEP suppresses statements that can remove stored data or schema objects, including table, column, view, materialized-view, and sequence drops as well as column type rewrites, `DELETE`, and `TRUNCATE`. Non-data-removing changes remain available, including adding objects, dropping indexes or constraints, and relaxing a column with `DROP NOT NULL`. Suppressed statements are returned separately and are not written into the executable SQL file.
+
+Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`. A view definition includes its defining `SELECT`, and views should be listed in dependency order. Compatible changes use `CREATE OR REPLACE VIEW`, while output-shape changes and materialized-view replacements require destructive mode.
+
 ### Migration Runner
 
 `MigrationRunner` applies ordered database migrations once and records each applied version in `MigrationHistoryTable`. It validates empty migration lists, duplicate versions, and non-positive versions before doing any migration work.
@@ -311,7 +345,7 @@ class PatientsQuery(parameters: HttpRequestParameters) : PagedQuery(PatientsTabl
 val response = PatientsQuery(request.parameters).toJsonObject()
 ```
 
-`AppSchema` groups tables, extensions, sequences, and post-create SQL for an application-owned schema. It is useful for bootstrap, tests, migrations, and local setup.
+`AppSchema` is the legacy lifecycle-oriented subclass of `KeepSchema`. It groups tables, extensions, sequences, and post-create SQL for bootstrap, tests, and local setup. Since it inherits `KeepSchema`, it can also be passed to `PostgresMigrationGenerator` while applications transition to the declarative API.
 
 ```kotlin
 object PatientSchema : AppSchema() {

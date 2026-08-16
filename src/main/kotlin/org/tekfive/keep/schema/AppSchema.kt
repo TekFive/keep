@@ -1,6 +1,5 @@
 package org.tekfive.keep.schema
 
-import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.TransactionManager
 import org.tekfive.keep.data.DataTable
@@ -20,18 +19,21 @@ import kotlin.io.use
  * transaction { MyAppSchema.create() }
  * ```
  */
-abstract class AppSchema() {
+abstract class AppSchema(
+    schemaName: String = "public",
+) : KeepSchema(schemaName) {
 
     open val extensions: List<String> = emptyList()
 
     open val sequences: List<String> = listOf(DataTable.DeaultSequenceName)
 
-    abstract val tables: List<Table>
+    override val sequenceNames: List<String>
+        get() = sequences
 
     /** Creates database extensions and all tables. Must be called within a transaction. */
     open fun create() {
 
-        for (sequence in sequences) {
+        for (sequence in sequenceNames) {
             TransactionManager.current().exec("CREATE SEQUENCE IF NOT EXISTS $sequence AS BIGINT MAXVALUE 9223372036854775807 START 1;")
         }
         for (ext in extensions) {
