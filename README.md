@@ -27,21 +27,38 @@ KEEP includes small operational building blocks that application code usually ne
 
 ## Installation
 
-Gradle dependency:
+Add JitPack to your dependency repositories:
 
 ```kotlin
-implementation("org.tekfive:keep:1.0.0")
+repositories {
+    mavenCentral()
+    maven("https://jitpack.io")
+}
 ```
 
-KEEP depends on ACK, JFK, and KViash. By default Gradle resolves `org.tekfive` artifacts from the local Maven repository first, then Maven Central. For local development against sibling checkouts at `../ack`, `../jfk`, and `../kviash`, pass `-Pkeep.useLocalProjects=true` or set `KEEP_USE_LOCAL_PROJECTS=true`.
+Then add KEEP:
+
+```kotlin
+implementation("com.github.TekFive:keep:v1.0.0")
+```
+
+KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
 
 ## Development
 
 Run the test suite:
 
 ```bash
+./gradlew test
+```
+
+To develop against sibling source checkouts instead of JitPack artifacts, place ACK, JFK, and KViash beside this repository and enable local-project substitution:
+
+```bash
 ./gradlew -Pkeep.useLocalProjects=true test
 ```
+
+`KEEP_USE_LOCAL_PROJECTS=true` provides the same switch for environments where an environment variable is more convenient.
 
 Publish to the local Maven repository:
 

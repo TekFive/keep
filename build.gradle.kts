@@ -16,16 +16,11 @@ val jarTempFilePrefix = "${rootProject.name}-jar-"
 repositories {
     mavenLocal()
     mavenCentral()
-    // org.tekfive sibling libs, each resolved from its own GitHub Packages registry. The packages
-    // are public, so any valid token works — the build's GITHUB_TOKEN (CI) or gpr.user/gpr.key.
-    listOf("TekFive/ack", "TekFive/jfk", "TekFive/kviash", "TekFive/keep", "TekFive/konnekt").forEach { ghRepo ->
-        maven {
-            name = "GitHubPackages-${ghRepo.substringAfter('/')}"
-            url = uri("https://maven.pkg.github.com/$ghRepo")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR") ?: findProperty("gpr.user") as String?
-                password = System.getenv("GITHUB_TOKEN") ?: findProperty("gpr.key") as String?
-            }
+    maven {
+        name = "JitPack"
+        url = uri("https://jitpack.io")
+        content {
+            includeGroup("com.github.TekFive")
         }
     }
 }
@@ -45,9 +40,9 @@ dependencies {
     api("com.zaxxer:HikariCP:7.0.2")
     api("com.google.crypto.tink:tink:1.17.0")
     api("org.bouncycastle:bcprov-jdk18on:1.84")
-    api("org.tekfive:jfk:1.0.0")
-    api("org.tekfive:ack:1.0.0")
-    api("org.tekfive:kviash:1.0.0")
+    api("com.github.TekFive:jfk:55b9e2676e")
+    api("com.github.TekFive:ack:v1.0.0")
+    api("com.github.TekFive:kviash:v1.0.0")
 
     compileOnly("org.postgresql:postgresql:42.7.11")
 
