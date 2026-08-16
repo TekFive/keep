@@ -24,6 +24,6 @@ interface TableWithUniqueName {
             predicate = predicate and additionalPredicate()
         }
 
-        return !(this as DataTuple<*>).rowExists(predicate)
+        return (this as DataTuple<*>).rowExists(predicate)
     }
 }

@@ -51,9 +51,10 @@ data class Address(
             }
             val street = json["street"].string
             val city = json["city"].string
-            val stateId = json["state"].int
-            val state = State.mapOptional(stateId)
-            val zip = json["zipCode"].string
+            val stateValue = json["state"]
+            val state = State.mapOptional(stateValue.int)
+                ?: State.mapOptionalName(stateValue.string)
+            val zip = json["zip"].string ?: json["zipCode"].string
             return Address(street, city, state, zip)
         }
     }
@@ -87,7 +88,7 @@ fun Address?.isNotNullAndFullAddress(): Boolean {
 @OptIn(ExperimentalContracts::class)
 fun Address?.nullEquivalent(address: Address?): Boolean {
     return if (this == null || !hasData) {
-        address.isNotNullOrEmpty()
+        address.isNullOrEmpty()
     } else if (address.isNullOrEmpty()) {
         false
     } else {

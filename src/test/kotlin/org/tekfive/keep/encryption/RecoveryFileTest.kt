@@ -6,6 +6,10 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.DataOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.writeBytes
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -117,5 +121,39 @@ class RecoveryFileTest {
         assertThrows<RecoveryFileException> {
             RecoveryFile.write(file, testParams, salt, nonce, ciphertext)
         }
+    }
+
+    @Test
+    fun `concurrent no-overwrite writes publish exactly one recovery file`(@TempDir tmp: Path) {
+        val file = tmp.resolve("k.recovery")
+        val writers = 8
+        val ready = CountDownLatch(writers)
+        val start = CountDownLatch(1)
+        val successes = AtomicInteger()
+        val executor = Executors.newFixedThreadPool(writers)
+
+        try {
+            val futures = (0 until writers).map { index ->
+                executor.submit {
+                    ready.countDown()
+                    start.await(5, TimeUnit.SECONDS)
+                    val writerCiphertext = byteArrayOf(index.toByte()) + ByteArray(16)
+                    try {
+                        RecoveryFile.write(file, testParams, salt, nonce, writerCiphertext)
+                        successes.incrementAndGet()
+                    } catch (e: RecoveryFileException) {
+                        if (e.message?.startsWith("refusing to overwrite") != true) throw e
+                    }
+                }
+            }
+            ready.await(5, TimeUnit.SECONDS)
+            start.countDown()
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertEquals(1, successes.get())
+        assertEquals(17, RecoveryFile.read(file).ciphertext.size)
     }
 }

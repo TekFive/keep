@@ -39,7 +39,7 @@ abstract class BaseAckJobConfiguration() : JobConfiguration {
         }
 
     override fun getDatabaseBackoffSeconds(e: SQLException): Int {
-        return (databaseRetryPolicy.getWaitTimeAndRecordError() / 1000).toInt()
+        return databaseRetryPolicy.getWaitTimeAndRecordError().toInt()
     }
 
     companion object {

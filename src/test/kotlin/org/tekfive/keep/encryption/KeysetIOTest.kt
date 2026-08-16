@@ -5,6 +5,10 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.exists
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -75,5 +79,39 @@ class KeysetIOTest {
             val expected = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
             assertEquals(expected, perms)
         }
+    }
+
+    @Test
+    fun `concurrent no-overwrite writes publish exactly one keyset`(@TempDir tmp: Path) {
+        val target = tmp.resolve("keyset.json")
+        val writers = 8
+        val ready = CountDownLatch(writers)
+        val start = CountDownLatch(1)
+        val successes = AtomicInteger()
+        val executor = Executors.newFixedThreadPool(writers)
+
+        try {
+            val futures = (0 until writers).map {
+                executor.submit {
+                    val handle = KeysetTemplate.generateNewKeysetHandle()
+                    ready.countDown()
+                    start.await(5, TimeUnit.SECONDS)
+                    try {
+                        KeysetIO.write(handle, target)
+                        successes.incrementAndGet()
+                    } catch (_: KeysetAlreadyExistsException) {
+                        // Exactly one writer owns the final path.
+                    }
+                }
+            }
+            ready.await(5, TimeUnit.SECONDS)
+            start.countDown()
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertEquals(1, successes.get())
+        assertNotNull(KeysetIO.read(target))
     }
 }

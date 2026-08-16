@@ -1,10 +1,18 @@
 package org.tekfive.keep.job
 
 import org.junit.jupiter.api.Test
+import java.sql.SQLException
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class BaseJobRecordConfigurationTest {
+
+    @Test
+    fun `database backoff policy returns seconds without converting them again`() {
+        val config = DefaultJobConfiguration()
+
+        assertEquals(2, config.getDatabaseBackoffSeconds(SQLException("connection lost", "08006")))
+    }
 
     @Test
     fun `default dispatchCount is number of available processors`() {

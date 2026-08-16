@@ -162,7 +162,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 type = spec.jobTypeIdentifier,
                 createdAt = now,
                 priority = spec.jobPriority ?: 0,
-                parentJobId = parentJobContext?.jobId,
+                parentJobId = parentJobId,
                 minimumStartAt = minStartAt,
                 attempt = parentJobContext?.let { it.attempt + 1 } ?: 1,
                 estimatedRuntimeSeconds = estimatedRuntimeSeconds,

@@ -343,6 +343,19 @@ class JobRecordsTableOperationsIntegrationTest {
     }
 
     @Test
+    fun `insertJob stores an explicit parent job id`() {
+        val id = db {
+            table.insertJob(
+                defaultSpec,
+                parentJobId = 987L,
+            )
+        }
+
+        val job = db { table.getById(id) }
+        assertEquals(987L, job.parentJobId)
+    }
+
+    @Test
     fun `insertJob rejects concurrency key without max`() {
         assertFailsWith<IllegalArgumentException> {
             db {

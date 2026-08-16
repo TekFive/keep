@@ -47,7 +47,7 @@ abstract class BaseJobConfiguration() : JobConfiguration {
     override val minSaveLogLevel: JobRecordLogLevel? = DEFAULT_MIN_SAVE_LOG_LEVEL
 
     override fun getDatabaseBackoffSeconds(e: SQLException): Int {
-        return (databaseRetryPolicy.getWaitTimeAndRecordError() / 1000).toInt()
+        return databaseRetryPolicy.getWaitTimeAndRecordError().toInt()
     }
 
     companion object {

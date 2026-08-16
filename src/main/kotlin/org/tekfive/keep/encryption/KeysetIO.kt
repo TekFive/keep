@@ -3,10 +3,8 @@ package org.tekfive.keep.encryption
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkJsonProtoKeysetFormat
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.io.path.exists
 import kotlin.io.path.readText
@@ -71,11 +69,7 @@ object KeysetIO {
             // Set mode 0600 on POSIX systems before the rename so the file is
             // never world-readable, even briefly.
             applyOwnerOnlyPermissions(temp)
-            try {
-                Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (e: AtomicMoveNotSupportedException) {
-                Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING)
-            }
+            installFile(temp, path, overwrite) { KeysetAlreadyExistsException(path) }
         } catch (t: Throwable) {
             // Ensure no leftover temp file on failure.
             try { Files.deleteIfExists(temp) } catch (_: Throwable) { /* best effort */ }
