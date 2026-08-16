@@ -1,12 +1,7 @@
 name: release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Release version without the v prefix (for example, 1.0.0)
-        required: true
-        type: string
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -26,14 +21,15 @@ jobs:
         with:
           gradle-version: "9.5.1"
 
-      - name: Validate release version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
+      - name: Read and validate release version
+        id: release
         run: |
-          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release version must be semantic version text without a v prefix." >&2
+          version="$(./gradlew -q properties --property version --no-daemon | sed -n 's/^version: //p')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Gradle project version must be semantic version text without a v prefix; found: $version" >&2
             exit 1
           fi
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
         run: ./gradlew test --no-daemon
@@ -41,10 +37,9 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          tag="v${RELEASE_VERSION}"
-          gh release create "$tag" \
+          gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" \
-            --title "$tag" \
+            --title "$RELEASE_TAG" \
             --generate-notes
