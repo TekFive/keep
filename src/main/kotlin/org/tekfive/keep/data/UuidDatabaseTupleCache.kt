@@ -5,6 +5,7 @@ import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** A bounded, expiring cache for UUID-backed tuples. */
 abstract class UuidDatabaseTupleCache<D : UuidData>(
@@ -15,9 +16,14 @@ abstract class UuidDatabaseTupleCache<D : UuidData>(
 
     abstract val maxCacheSeconds: Int
 
-    private class Entry<D>(val value: D, val cachedAt: Long)
+    private class Entry<D>(
+        val value: D,
+        val cachedAt: Long,
+        val insertionOrder: Long,
+    )
 
     private val store = ConcurrentHashMap<UUID, Entry<D>>()
+    private val insertionSequence = AtomicLong()
 
     val size: Int get() = store.size
 
@@ -34,7 +40,7 @@ abstract class UuidDatabaseTupleCache<D : UuidData>(
 
     operator fun set(id: UUID, value: D) {
         if (maxCachedRows <= 0) return
-        store[id] = Entry(value, System.currentTimeMillis())
+        store[id] = newEntry(value)
         evictIfNeeded()
     }
 
@@ -54,10 +60,16 @@ abstract class UuidDatabaseTupleCache<D : UuidData>(
 
     private fun fetchAndCache(id: UUID): D? {
         val value = fetchFromDb(id) ?: return null
-        store[id] = Entry(value, System.currentTimeMillis())
+        store[id] = newEntry(value)
         evictIfNeeded()
         return value
     }
+
+    private fun newEntry(value: D): Entry<D> = Entry(
+        value = value,
+        cachedAt = System.currentTimeMillis(),
+        insertionOrder = insertionSequence.incrementAndGet(),
+    )
 
     private fun isExpired(entry: Entry<D>): Boolean =
         System.currentTimeMillis() - entry.cachedAt > maxCacheSeconds * 1000L
@@ -70,8 +82,8 @@ abstract class UuidDatabaseTupleCache<D : UuidData>(
         store.entries.removeIf { now - it.value.cachedAt > maxAgeMs }
 
         while (store.size > maxCachedRows) {
-            val oldest = store.entries.minByOrNull { it.value.cachedAt } ?: break
-            store.remove(oldest.key)
+            val oldest = store.entries.minByOrNull { it.value.insertionOrder } ?: break
+            store.remove(oldest.key, oldest.value)
         }
     }
 }

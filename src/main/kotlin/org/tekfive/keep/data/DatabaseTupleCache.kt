@@ -5,6 +5,7 @@ import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.tekfive.keep.db.db
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 abstract class DatabaseTupleCache<D : Data>(
     protected val tuple: DataTuple<D>,
@@ -14,9 +15,14 @@ abstract class DatabaseTupleCache<D : Data>(
 
     abstract val maxCacheSeconds: Int
 
-    private class Entry<D>(val value: D, val cachedAt: Long)
+    private class Entry<D>(
+        val value: D,
+        val cachedAt: Long,
+        val insertionOrder: Long,
+    )
 
     private val store = ConcurrentHashMap<Long, Entry<D>>()
+    private val insertionSequence = AtomicLong()
 
     val size: Int get() = store.size
 
@@ -35,7 +41,7 @@ abstract class DatabaseTupleCache<D : Data>(
 
     operator fun set(id: Long, value: D) {
         if (maxCachedRows <= 0) return
-        store[id] = Entry(value, System.currentTimeMillis())
+        store[id] = newEntry(value)
         evictIfNeeded()
     }
 
@@ -58,10 +64,16 @@ abstract class DatabaseTupleCache<D : Data>(
 
     private fun fetchAndCache(id: Long): D? {
         val value = fetchFromDb(id) ?: return null
-        store[id] = Entry(value, System.currentTimeMillis())
+        store[id] = newEntry(value)
         evictIfNeeded()
         return value
     }
+
+    private fun newEntry(value: D): Entry<D> = Entry(
+        value = value,
+        cachedAt = System.currentTimeMillis(),
+        insertionOrder = insertionSequence.incrementAndGet(),
+    )
 
     private fun isExpired(entry: Entry<D>): Boolean {
         return System.currentTimeMillis() - entry.cachedAt > maxCacheSeconds * 1000L
@@ -78,8 +90,8 @@ abstract class DatabaseTupleCache<D : Data>(
 
         // If still over limit, remove oldest entries
         while (store.size > max) {
-            val oldest = store.entries.minByOrNull { it.value.cachedAt } ?: break
-            store.remove(oldest.key)
+            val oldest = store.entries.minByOrNull { it.value.insertionOrder } ?: break
+            store.remove(oldest.key, oldest.value)
         }
     }
 }

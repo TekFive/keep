@@ -149,5 +149,8 @@ class DatabaseTupleCacheTest {
 
         cache.find(3L)
         assertEquals(2, cache.size)
+
+        cache.invalidate(3L)
+        assertEquals(1, cache.size)
     }
 }
