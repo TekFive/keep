@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.1")
+implementation("com.github.TekFive:keep:v1.0.2")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -176,6 +176,41 @@ val query = WorkflowRevisionsTable
 ```
 
 Schema helpers also provide common timestamp, active, description, foreign-key, and unique-constraint conventions.
+
+### Connection-Free Fresh Installation SQL
+
+`PostgresFreshInstallGenerator` renders a complete PostgreSQL installation script from a `KeepSchema` without opening a database connection. This is a fresh install, not a comparison or merge. It includes the schema, extensions, custom types, sequences, tables, constraints, indexes, table hooks, views, and materialized views in dependency order.
+
+```kotlin
+object ApplicationSchema : KeepSchema("app") {
+    override val extensions = listOf("citext")
+    override val tables = listOf(UsersTable, OrdersTable)
+    override val sequenceDefinitions = listOf(
+        PostgresSequenceDefinition(
+            name = "order_number_seq",
+            startWith = 1000,
+            cache = 20,
+        )
+    )
+    override val views = listOf(
+        PostgresViewDefinition(
+            name = "active_users",
+            query = "SELECT id, email FROM app.users WHERE active",
+        )
+    )
+}
+
+PostgresFreshInstallGenerator.generate(
+    keepSchema = ApplicationSchema,
+    output = Path.of("install.sql"),
+    overwrite = true,
+    targetVersion = PostgresTargetVersion(major = 16),
+)
+```
+
+`beforeTablesSql` and `afterTablesSql` provide ordered escape hatches for application-specific types, functions, triggers, grants, and other PostgreSQL objects not represented by Exposed tables. Foreign-key targets must all be declared in the same `KeepSchema`, preventing an apparently complete script from silently depending on an undeclared table.
+
+The target PostgreSQL version is explicit and defaults to PostgreSQL 16, making dialect decisions deterministic. Generated scripts can be checked into source control or packaged with an application.
 
 ### PostgreSQL Migration Generation
 

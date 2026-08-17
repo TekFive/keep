@@ -69,7 +69,7 @@ object PostgresMigrationGenerator {
 
         val existingSequences = inventory.filter { it.kind == ExistingObjectKind.SEQUENCE }
         val existingSequenceNames = existingSequences.mapTo(mutableSetOf()) { it.name }
-        keepSchema.sequenceNames
+        keepSchema.declaredSequenceNames
             .filterNot(existingSequenceNames::contains)
             .sorted()
             .forEach { sequenceName ->
@@ -136,7 +136,7 @@ object PostgresMigrationGenerator {
             candidates += candidate(it)
         }
 
-        val desiredSequenceNames = keepSchema.sequenceNames.toSet()
+        val desiredSequenceNames = keepSchema.declaredSequenceNames.toSet()
         val extraSequences = existingSequences
             .filter { !it.ownedByTable && it.name !in desiredSequenceNames }
             .map { it.name }
@@ -359,10 +359,10 @@ object PostgresMigrationGenerator {
             validateIdentifier(it.name, "view")
             require(it.query.withoutTrailingSemicolon().isNotBlank()) { "View ${it.name} has a blank query" }
         }
-        keepSchema.sequenceNames.forEach { validateIdentifier(it, "sequence") }
+        keepSchema.declaredSequenceNames.forEach { validateIdentifier(it, "sequence") }
 
         val tableNames = keepSchema.tables.map { it.tableName.substringAfterLast('.').trim('"') }
-        val allNames = tableNames + keepSchema.views.map { it.name } + keepSchema.sequenceNames
+        val allNames = tableNames + keepSchema.views.map { it.name } + keepSchema.declaredSequenceNames
         val duplicates = allNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
         require(duplicates.isEmpty()) {
             "PostgreSQL tables, views, and sequences share a namespace; duplicate KeepSchema names: $duplicates"
@@ -410,7 +410,7 @@ object PostgresMigrationGenerator {
                 "KeepSchema view ${view.name} conflicts with existing PostgreSQL ${existing.kind.description}"
             }
         }
-        keepSchema.sequenceNames.forEach { sequence ->
+        keepSchema.declaredSequenceNames.forEach { sequence ->
             val existing = existingByName[sequence] ?: return@forEach
             require(existing.kind == ExistingObjectKind.SEQUENCE) {
                 "KeepSchema sequence $sequence conflicts with existing PostgreSQL ${existing.kind.description}"

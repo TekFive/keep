@@ -24,7 +24,7 @@ abstract class AppSchema(
     schemaName: String = "public",
 ) : KeepSchema(schemaName) {
 
-    open val extensions: List<String> = emptyList()
+    override val extensions: List<String> = emptyList()
 
     open val sequences: List<String> = listOf(DataTable.DeaultSequenceName)
 
