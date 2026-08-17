@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.0")
+implementation("com.github.TekFive:keep:v1.0.1")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -102,6 +102,25 @@ PatientsTable.update(patient)
 ```
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
+
+KEEP also supports UUIDv7 primary keys as an additive alternative to the existing shared-sequence `Long` strategy. Extend `UuidData` and `UuidDataTable`; the table creates a native PostgreSQL `UUID` column and generates UUIDv7 values in the client, so PostgreSQL 16 and later are supported without an extension or server-side UUID function.
+
+```kotlin
+class Patient(
+    val mrn: String,
+    var displayName: String,
+) : UuidData()
+
+object PatientsTable : UuidDataTable<Patient>("patients") {
+    val mrn = varchar("mrn", 64).uniqueIndex()
+    val displayName = name("display_name")
+}
+
+val patient = PatientsTable.create(Patient("MRN-001", "Ada Lovelace"))
+check(patient.id.version() == 7)
+```
+
+UUID counterparts are available for views, join tables, database tuple caches, unique-name checks, and foreign keys. `TypedDataJoinTable` can be used when an association spans different identity types. The generated UUID default is an Exposed client default, so inserts performed outside Exposed must supply an `id` explicitly.
 
 ### Transaction Utilities
 
@@ -191,6 +210,8 @@ plan.suppressedStatements.forEach {
 With `nonDestructive = true`, KEEP suppresses statements that can remove stored data or schema objects, including table, column, view, materialized-view, and sequence drops as well as column type rewrites, `DELETE`, and `TRUNCATE`. Non-data-removing changes remain available, including adding objects, dropping indexes or constraints, and relaxing a column with `DROP NOT NULL`. Suppressed statements are returned separately and are not written into the executable SQL file.
 
 Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`. A view definition includes its defining `SELECT`, and views should be listed in dependency order. Compatible changes use `CREATE OR REPLACE VIEW`, while output-shape changes and materialized-view replacements require destructive mode.
+
+Changing an existing identity column between an integer and UUID is intentionally not generated. That conversion requires an additive, application-specific migration that creates and backfills new primary-key and foreign-key columns before swapping them; KEEP reports this case instead of emitting an invalid PostgreSQL cast.
 
 ### Migration Runner
 

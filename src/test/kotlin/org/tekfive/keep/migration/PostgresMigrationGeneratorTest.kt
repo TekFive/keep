@@ -1,6 +1,7 @@
 package org.tekfive.keep.migration
 
 import org.jetbrains.exposed.v1.core.Table
+import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.TestDatabase
@@ -12,12 +13,19 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 private const val GENERATOR_SCHEMA = "keep_migration_generator_test"
 
 private object GeneratorWidgets : Table("$GENERATOR_SCHEMA.widgets") {
     val id = long("id")
+    val relaxed = text("relaxed").nullable()
+    override val primaryKey = PrimaryKey(id)
+}
+
+private object UuidGeneratorWidgets : Table("$GENERATOR_SCHEMA.widgets") {
+    val id = javaUUID("id")
     val relaxed = text("relaxed").nullable()
     override val primaryKey = PrimaryKey(id)
 }
@@ -179,6 +187,20 @@ class PostgresMigrationGeneratorTest {
         }
         val secondPlan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = false)
         assertTrue(secondPlan.isEmpty, "Expected an empty plan after applying generated SQL: $secondPlan")
+    }
+
+    @Test
+    fun `integer to UUID identity changes require an additive manual migration`() {
+        transaction(database) {
+            exec("CREATE TABLE $GENERATOR_SCHEMA.widgets (id BIGINT PRIMARY KEY, relaxed TEXT)")
+        }
+        val uuidSchema = keepSchema.copy(tables = listOf(UuidGeneratorWidgets), views = emptyList())
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            PostgresMigrationGenerator.plan(database, uuidSchema, nonDestructive = false)
+        }
+
+        assertTrue(error.message.orEmpty().contains("manual additive migration"))
     }
 
     @Test

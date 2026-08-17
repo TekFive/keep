@@ -123,6 +123,36 @@ object NoteTable : DataTable<NoteData>("notes") {
     val simpleId = fkey("simple_id", SimpleTable)
 }
 
+// -- UUIDv7 identity scenario -------------------------------------------------
+
+class UuidSimpleData(val name: String, var score: Int) : UuidData()
+
+object UuidSimpleTable : UuidDataTable<UuidSimpleData>("uuid_simple"), UuidTableWithUniqueName {
+    override val name = varchar("name", 255)
+    val score = integer("score")
+    override val customIndices = listOf("CREATE INDEX uuid_simple_score_custom_idx ON uuid_simple(score)")
+}
+
+class UuidWidgetData(val label: String, var quantity: Int) : UuidData()
+
+object UuidWidgetTable : UuidDataTable<UuidWidgetData>("uuid_widgets") {
+    val label = varchar("label", 255)
+    val quantity = integer("quantity")
+}
+
+object UuidSimpleWidgetJoin : UuidDataJoinTable<UuidSimpleData, UuidWidgetData>(
+    "uuid_simple_widget",
+    UuidSimpleTable,
+    UuidWidgetTable,
+)
+
+class UuidNoteData(val text: String, var simpleId: java.util.UUID) : UuidData()
+
+object UuidNoteTable : UuidDataTable<UuidNoteData>("uuid_notes") {
+    val text = varchar("text", 255)
+    val simpleId = fkey("simple_id", UuidSimpleTable)
+}
+
 // -- Nullable list scenario: empty list maps to null on nullable columns ------
 
 class NullableListData(val name: String, var tags: List<String>) : Data()

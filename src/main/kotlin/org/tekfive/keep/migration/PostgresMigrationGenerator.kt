@@ -180,6 +180,7 @@ object PostgresMigrationGenerator {
                     val desiredType = desiredTypes.getValue(column)
                     if (!existingType.equals(desiredType, ignoreCase = true)) {
                         val columnName = transaction.identity(column)
+                        requireAutomaticTypeMigration(existingType, desiredType, transaction.identity(table), columnName)
                         add(
                             "ALTER TABLE ${transaction.identity(table)} " +
                                 "ALTER COLUMN $columnName TYPE $desiredType USING $columnName::$desiredType"
@@ -187,6 +188,22 @@ object PostgresMigrationGenerator {
                     }
                 }
             }
+        }
+    }
+
+    private fun requireAutomaticTypeMigration(
+        existingType: String,
+        desiredType: String,
+        tableName: String,
+        columnName: String,
+    ) {
+        val existing = existingType.lowercase(Locale.ROOT)
+        val desired = desiredType.lowercase(Locale.ROOT)
+        val integerTypes = setOf("smallint", "integer", "bigint")
+        require(!((existing in integerTypes && desired == "uuid") || (existing == "uuid" && desired in integerTypes))) {
+            "Cannot automatically migrate $tableName.$columnName from $existingType to $desiredType. " +
+                "Changing between sequence-backed integer and UUID identities requires a manual additive migration " +
+                "that creates and backfills new primary-key and foreign-key columns before swapping them."
         }
     }
 

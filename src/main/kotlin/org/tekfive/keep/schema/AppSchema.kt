@@ -3,6 +3,7 @@ package org.tekfive.keep.schema
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.TransactionManager
 import org.tekfive.keep.data.DataTable
+import org.tekfive.keep.data.DataTableSchemaHooks
 import org.tekfive.keep.db.db
 import org.tekfive.keep.db.dbConnection
 import kotlin.io.use
@@ -74,8 +75,8 @@ abstract class AppSchema(
         }
     }
 
-    private fun runDataTableSql(sqlProvider: (DataTable<*>) -> List<String>) {
-        tables.filterIsInstance<DataTable<*>>().forEach { table ->
+    private fun runDataTableSql(sqlProvider: (DataTableSchemaHooks) -> List<String>) {
+        tables.filterIsInstance<DataTableSchemaHooks>().forEach { table ->
             sqlProvider(table).forEach { sql ->
                 TransactionManager.current().exec(sql)
             }

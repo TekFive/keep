@@ -23,7 +23,7 @@ import kotlin.reflect.KProperty1
 abstract class DataTable<D : Data>(
     name: String,
     val idSequenceName: String = DeaultSequenceName,
-) : DataTuple<D>(name, managedColumns = setOf("id")) {
+) : DataTuple<D>(name, managedColumns = setOf("id")), DataTableSchemaHooks {
 
     override val id: Column<Long> = long("id").autoIncrement(idSequenceName)
 
@@ -214,11 +214,11 @@ abstract class DataTable<D : Data>(
         return deleteWhere { (column as Column<Any?>) eq (value as Any?) }
     }
 
-    open val postSchemaCreateSql: List<String> = emptyList()
+    override val postSchemaCreateSql: List<String> = emptyList()
 
-    open val customTypes: List<String> = emptyList()
+    override val customTypes: List<String> = emptyList()
 
-    open val customIndices: List<String> = emptyList()
+    override val customIndices: List<String> = emptyList()
 
     companion object {
         const val DeaultSequenceName = "GlobalId"

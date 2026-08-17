@@ -5,11 +5,31 @@ import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.greater
 import org.tekfive.keep.text.citext
+import java.util.UUID
 
 /** Creates an indexed long column that references [target]'s `id` as a named foreign key. */
 fun Table.fkey(name: String, target: DataTable<*>, onDelete: ReferenceOption = ReferenceOption.CASCADE): Column<Long> {
     return long(name).references(target.id, fkName = "${tableName}_${name}_fk", onDelete = onDelete).indexWithStandardName()
 }
+
+/** Creates an indexed UUID column that references a [UuidDataTable] primary key. */
+fun Table.uuidFkey(
+    name: String,
+    target: UuidDataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+): Column<UUID> = reference(
+    name = name,
+    refColumn = target.id,
+    onDelete = onDelete,
+    fkName = "${tableName}_${name}_fk",
+).indexWithStandardName()
+
+/** UUID overload of [fkey]. */
+fun Table.fkey(
+    name: String,
+    target: UuidDataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+): Column<UUID> = uuidFkey(name, target, onDelete)
 
 fun Table.timestamp(name: String): Column<Long> {
     return long(name).check("${tableName}_${name}_positive") { it greater 0L }
