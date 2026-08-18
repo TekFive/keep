@@ -13,6 +13,8 @@ import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Clock
 
+private const val VALIDATION_TIMEOUT_SECONDS = 5
+
 fun dbTransactionAt(): Long = DbConnection.transactionAt
 
 
@@ -103,6 +105,11 @@ object DbConnection {
     private var connectionProvider: ConnectionProvider? = null
 
     val isStarted: Boolean get() = connectionProvider != null
+
+    fun isReachable(validationTimeoutSeconds: Int = VALIDATION_TIMEOUT_SECONDS): Boolean =
+        runCatching {
+            db(cache = false) { dbConnection().isValid(validationTimeoutSeconds) }
+        }.getOrDefault(false)
 
     fun startup() {
         check(connectionProvider == null) { "DB is already started."}
