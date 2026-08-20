@@ -61,6 +61,11 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// Keep linting out of build/check, including when ktlint tasks are contributed by an init script.
+tasks.matching { it.name.contains("ktlint", ignoreCase = true) }.configureEach {
+    enabled = false
+}
+
 tasks.jar {
     doLast {
         val jarFile = archiveFile.get().asFile
