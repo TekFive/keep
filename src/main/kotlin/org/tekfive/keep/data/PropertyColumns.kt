@@ -39,6 +39,10 @@ private val wordBoundary = Regex("([a-z0-9])([A-Z])")
 internal fun KProperty1<*, *>.standardIdColumnName(): String =
     standardColumnName().let { if (it.endsWith("_id")) it else "${it}_id" }
 
+@PublishedApi
+internal fun KProperty1<*, *>.standardIdsColumnName(): String =
+    standardColumnName().let { if (it.endsWith("_ids")) it else "${it}_ids" }
+
 /** Converts a Kotlin property name such as `minimumStartAt` or `URLValue` to PostgreSQL snake case. */
 fun KProperty1<*, *>.standardColumnName(): String = name
     .trimStart('_')
@@ -338,7 +342,7 @@ fun <D> Table.column(
 @JvmName("columnDataEnumList")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, List<E>>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdsColumnName(),
     encrypted: Boolean = false,
 ): Column<List<E>> where E : Enum<E>, E : DataEnum =
     if (encrypted) encryptedDataEnumList(name) else dataEnumList(name)
@@ -346,7 +350,7 @@ inline fun <D, reified E> Table.column(
 @JvmName("columnNullableDataEnumList")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, List<E>?>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdsColumnName(),
     encrypted: Boolean = false,
 ): Column<List<E>?> where E : Enum<E>, E : DataEnum =
     (if (encrypted) encryptedDataEnumList<E>(name) else dataEnumList<E>(name)).nullable()
@@ -354,13 +358,13 @@ inline fun <D, reified E> Table.column(
 @JvmName("columnDataEnumSet")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, Set<E>>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdsColumnName(),
 ): Column<Set<E>> where E : Enum<E>, E : DataEnum = dataEnumSet(name)
 
 @JvmName("columnNullableDataEnumSet")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, Set<E>?>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdsColumnName(),
 ): Column<Set<E>?> where E : Enum<E>, E : DataEnum = dataEnumSet<E>(name).nullable()
 
 @JvmName("columnSet")

@@ -63,7 +63,9 @@ private class PropertyColumnModel(
     val optionalTags: List<String>?,
     val statuses: List<PropertyColumnStatus>,
     val optionalStatuses: List<PropertyColumnStatus>?,
+    val statusIds: List<PropertyColumnStatus>,
     val statusSet: Set<PropertyColumnStatus>,
+    val optionalStatusSet: Set<PropertyColumnStatus>?,
     val numbers: Set<Long>,
     val optionalNumbers: Set<Long>?,
     val payload: PropertyColumnPayload,
@@ -113,7 +115,9 @@ private object PropertyColumnTable : Table("property_columns") {
     val optionalTags = column(PropertyColumnModel::optionalTags)
     val statuses = column(PropertyColumnModel::statuses)
     val optionalStatuses = column(PropertyColumnModel::optionalStatuses)
+    val statusIds = column(PropertyColumnModel::statusIds)
     val statusSet = column(PropertyColumnModel::statusSet)
+    val optionalStatusSet = column(PropertyColumnModel::optionalStatusSet)
     val numbers = column(PropertyColumnModel::numbers)
     val optionalNumbers = column(PropertyColumnModel::optionalNumbers)
     val payload = column(PropertyColumnModel::payload, PropertyColumnPayload)
@@ -219,7 +223,13 @@ class PropertyColumnsTest {
         assertTrue(PropertyColumnTable.optionalStatus.columnType.nullable)
         assertEquals("TEXT[]", PropertyColumnTable.tags.columnType.sqlType())
         assertEquals("INTEGER[]", PropertyColumnTable.statuses.columnType.sqlType())
+        assertEquals("statuses_ids", PropertyColumnTable.statuses.name)
+        assertEquals("optional_statuses_ids", PropertyColumnTable.optionalStatuses.name)
+        assertEquals("status_ids", PropertyColumnTable.statusIds.name)
         assertEquals("INTEGER[]", PropertyColumnTable.statusSet.columnType.sqlType())
+        assertEquals("status_set_ids", PropertyColumnTable.statusSet.name)
+        assertEquals("optional_status_set_ids", PropertyColumnTable.optionalStatusSet.name)
+        assertTrue(PropertyColumnTable.optionalStatusSet.columnType.nullable)
         assertEquals("BIGINT[]", PropertyColumnTable.numbers.columnType.sqlType())
         assertTrue(PropertyColumnTable.optionalNumbers.columnType.nullable)
         assertEquals("JSONB", PropertyColumnTable.payload.columnType.sqlType())
@@ -306,8 +316,10 @@ class PropertyColumnsTest {
         val table = object : Table("property_enum_name") {}
 
         val status = table.column(PropertyColumnModel::status, name = "state")
+        val statuses = table.column(PropertyColumnModel::statuses, name = "states")
 
         assertEquals("state", status.name)
+        assertEquals("states", statuses.name)
     }
 
     @Suppress("PropertyName", "unused")
