@@ -4,6 +4,7 @@ import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.java.javaUUID
+import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone as exposedTimestampWithTimeZone
 import org.tekfive.jfk.FromJsonObject
 import org.tekfive.jfk.JsonArray
 import org.tekfive.jfk.JsonObject
@@ -25,6 +26,8 @@ import org.tekfive.keep.json.toFromJson
 import org.tekfive.keep.json.toFromJsonArray
 import org.tekfive.keep.text.citext
 import java.math.BigDecimal
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.jvm.JvmName
 import kotlin.reflect.KProperty1
@@ -136,6 +139,38 @@ fun <D> Table.column(
     name: String = property.standardColumnName(),
     timestamp: Boolean = false,
 ): Column<Long?> = (if (timestamp) timestamp(name) else long(name)).nullable()
+
+/**
+ * Registers an [Instant] column using epoch-millisecond [InstantStorage.BIGINT_EPOCH_MILLIS]
+ * storage by default. Select [InstantStorage.TIMESTAMP_WITH_TIME_ZONE] for a native PostgreSQL
+ * temporal column.
+ */
+@JvmName("columnInstant")
+fun <D> Table.column(
+    property: KProperty1<D, Instant>,
+    name: String = property.standardColumnName(),
+    storage: InstantStorage = InstantStorage.BIGINT_EPOCH_MILLIS,
+): Column<Instant> = instantColumn(name, storage)
+
+/** Nullable counterpart to [column] for an [Instant] property. */
+@JvmName("columnNullableInstant")
+fun <D> Table.column(
+    property: KProperty1<D, Instant?>,
+    name: String = property.standardColumnName(),
+    storage: InstantStorage = InstantStorage.BIGINT_EPOCH_MILLIS,
+): Column<Instant?> = instantColumn(name, storage).nullable()
+
+private fun Table.instantColumn(name: String, storage: InstantStorage): Column<Instant> = when (storage) {
+    InstantStorage.BIGINT_EPOCH_MILLIS -> long(name).transform(
+        wrap = Instant::ofEpochMilli,
+        unwrap = Instant::toEpochMilli,
+    )
+
+    InstantStorage.TIMESTAMP_WITH_TIME_ZONE -> exposedTimestampWithTimeZone(name).transform(
+        wrap = { it.toInstant() },
+        unwrap = { it.atOffset(ZoneOffset.UTC) },
+    )
+}
 
 @JvmName("columnFloat")
 fun <D> Table.column(

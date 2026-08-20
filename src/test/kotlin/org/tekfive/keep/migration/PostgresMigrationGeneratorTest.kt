@@ -5,8 +5,11 @@ import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.TestDatabase
+import org.tekfive.keep.data.InstantStorage
+import org.tekfive.keep.data.column
 import org.tekfive.keep.schema.KeepSchema
 import org.tekfive.keep.schema.PostgresViewDefinition
+import java.time.Instant
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -28,6 +31,19 @@ private object UuidGeneratorWidgets : Table("$GENERATOR_SCHEMA.widgets") {
     val id = javaUUID("id")
     val relaxed = text("relaxed").nullable()
     override val primaryKey = PrimaryKey(id)
+}
+
+private class GeneratorInstantModel(val occurredAt: Instant)
+
+private object GeneratorBigintInstants : Table("$GENERATOR_SCHEMA.instant_events") {
+    val occurredAt = column(GeneratorInstantModel::occurredAt)
+}
+
+private object GeneratorNativeInstants : Table("$GENERATOR_SCHEMA.instant_events") {
+    val occurredAt = column(
+        GeneratorInstantModel::occurredAt,
+        storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE,
+    )
 }
 
 private data class MigrationTestSchema(
@@ -201,6 +217,48 @@ class PostgresMigrationGeneratorTest {
         }
 
         assertTrue(error.message.orEmpty().contains("manual additive migration"))
+    }
+
+    @Test
+    fun `Instant storage migrations convert epoch milliseconds and native timestamps`() {
+        val epochMillis = 1_700_000_000_123L
+        transaction(database) {
+            exec("CREATE TABLE $GENERATOR_SCHEMA.instant_events (occurred_at BIGINT NOT NULL)")
+            exec("INSERT INTO $GENERATOR_SCHEMA.instant_events VALUES ($epochMillis)")
+        }
+        val nativeSchema = MigrationTestSchema(GENERATOR_SCHEMA, listOf(GeneratorNativeInstants))
+
+        val safePlan = PostgresMigrationGenerator.plan(database, nativeSchema, nonDestructive = true)
+        assertTrue(safePlan.statements.isEmpty())
+        assertTrue(safePlan.suppressedStatements.single().sql.contains("to_timestamp"))
+        assertEquals(
+            DestructivePostgresMigrationChange.ALTER_COLUMN_TYPE,
+            safePlan.suppressedStatements.single().reason,
+        )
+
+        val nativePlan = PostgresMigrationGenerator.plan(database, nativeSchema, nonDestructive = false)
+        assertTrue(nativePlan.statements.single().contains("to_timestamp"))
+        transaction(database) {
+            nativePlan.statements.forEach { exec(it) }
+            exec(
+                "SELECT occurred_at = to_timestamp($epochMillis / 1000.0) " +
+                    "FROM $GENERATOR_SCHEMA.instant_events"
+            ) { result ->
+                assertTrue(result.next())
+                assertTrue(result.getBoolean(1))
+            }
+        }
+
+        val bigintSchema = MigrationTestSchema(GENERATOR_SCHEMA, listOf(GeneratorBigintInstants))
+        val bigintPlan = PostgresMigrationGenerator.plan(database, bigintSchema, nonDestructive = false)
+        assertTrue(bigintPlan.statements.single().contains("extract(epoch"))
+        transaction(database) {
+            bigintPlan.statements.forEach { exec(it) }
+            exec("SELECT occurred_at FROM $GENERATOR_SCHEMA.instant_events") { result ->
+                assertTrue(result.next())
+                assertEquals(epochMillis, result.getLong(1))
+            }
+        }
     }
 
     @Test

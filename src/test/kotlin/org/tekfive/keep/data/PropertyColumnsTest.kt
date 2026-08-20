@@ -11,6 +11,7 @@ import org.tekfive.jfk.json
 import org.tekfive.keep.schema.PostgresTargetVersion
 import org.tekfive.keep.schema.withOfflinePostgresDdlContext
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -42,6 +43,10 @@ private class PropertyColumnModel(
     val createdAt: Long,
     val updatedAt: Long?,
     val optionalLong: Long?,
+    val occurredAt: Instant,
+    val optionalOccurredAt: Instant?,
+    val nativeOccurredAt: Instant,
+    val optionalNativeOccurredAt: Instant?,
     val ratio: Float,
     val score: Double?,
     val enabled: Boolean,
@@ -82,6 +87,16 @@ private object PropertyColumnTable : Table("property_columns") {
     val createdAt = timestamp(PropertyColumnModel::createdAt)
     val updatedAt = timestamp(PropertyColumnModel::updatedAt)
     val optionalLong = column(PropertyColumnModel::optionalLong)
+    val occurredAt = column(PropertyColumnModel::occurredAt)
+    val optionalOccurredAt = column(PropertyColumnModel::optionalOccurredAt)
+    val nativeOccurredAt = column(
+        PropertyColumnModel::nativeOccurredAt,
+        storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE,
+    )
+    val optionalNativeOccurredAt = column(
+        PropertyColumnModel::optionalNativeOccurredAt,
+        storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE,
+    )
     val ratio = column(PropertyColumnModel::ratio)
     val score = column(PropertyColumnModel::score)
     val enabled = column(PropertyColumnModel::enabled)
@@ -166,6 +181,13 @@ class PropertyColumnsTest {
         assertEquals("SMALLINT", PropertyColumnTable.shortValue.columnType.sqlType())
         assertEquals("INT", PropertyColumnTable.itemCount.columnType.sqlType())
         assertEquals("BIGINT", PropertyColumnTable.createdAt.columnType.sqlType())
+        assertEquals("BIGINT", PropertyColumnTable.occurredAt.columnType.sqlType())
+        assertEquals("BIGINT", PropertyColumnTable.optionalOccurredAt.columnType.sqlType())
+        assertEquals("TIMESTAMP WITH TIME ZONE", PropertyColumnTable.nativeOccurredAt.columnType.sqlType())
+        assertEquals(
+            "TIMESTAMP WITH TIME ZONE",
+            PropertyColumnTable.optionalNativeOccurredAt.columnType.sqlType(),
+        )
         assertEquals("created_at", PropertyColumnTable.createdAt.name)
         assertEquals("updated_at", PropertyColumnTable.updatedAt.name)
         assertEquals("REAL", PropertyColumnTable.ratio.columnType.sqlType())
@@ -180,6 +202,10 @@ class PropertyColumnsTest {
         assertTrue(PropertyColumnTable.shortValue.columnType.nullable)
         assertTrue(PropertyColumnTable.optionalId.columnType.nullable)
         assertTrue(PropertyColumnTable.updatedAt.columnType.nullable)
+        assertFalse(PropertyColumnTable.occurredAt.columnType.nullable)
+        assertTrue(PropertyColumnTable.optionalOccurredAt.columnType.nullable)
+        assertFalse(PropertyColumnTable.nativeOccurredAt.columnType.nullable)
+        assertTrue(PropertyColumnTable.optionalNativeOccurredAt.columnType.nullable)
     }
 
     @Test

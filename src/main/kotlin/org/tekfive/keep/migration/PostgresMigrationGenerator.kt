@@ -181,13 +181,31 @@ object PostgresMigrationGenerator {
                     if (!existingType.equals(desiredType, ignoreCase = true)) {
                         val columnName = transaction.identity(column)
                         requireAutomaticTypeMigration(existingType, desiredType, transaction.identity(table), columnName)
+                        val conversion = postgresTypeConversion(existingType, desiredType, columnName)
                         add(
                             "ALTER TABLE ${transaction.identity(table)} " +
-                                "ALTER COLUMN $columnName TYPE $desiredType USING $columnName::$desiredType"
+                                "ALTER COLUMN $columnName TYPE $desiredType USING ($conversion)"
                         )
                     }
                 }
             }
+        }
+    }
+
+    private fun postgresTypeConversion(existingType: String, desiredType: String, columnName: String): String {
+        val existing = existingType.lowercase(Locale.ROOT)
+        val desired = desiredType.lowercase(Locale.ROOT)
+        val existingIsTimestampWithTimeZone = existing.startsWith("timestamp") && existing.contains("with time zone")
+        val desiredIsTimestampWithTimeZone = desired.startsWith("timestamp") && desired.contains("with time zone")
+
+        return when {
+            existing == "bigint" && desiredIsTimestampWithTimeZone ->
+                "to_timestamp($columnName / 1000.0)"
+
+            existingIsTimestampWithTimeZone && desired == "bigint" ->
+                "floor(extract(epoch from $columnName) * 1000)::bigint"
+
+            else -> "$columnName::$desiredType"
         }
     }
 

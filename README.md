@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.5")
+implementation("com.github.TekFive:keep:v1.0.6")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -141,6 +141,27 @@ foreign-key columns, while standard KEEP foreign-key naming, indexing, and casca
 preserved.
 Timestamp columns can likewise be declared as `timestamp(AuditRecord::createdAt)` or from a nullable
 `Long?` property; the name is derived and KEEP's positive timestamp constraint is retained.
+
+`Instant` properties use `column` directly and are stored as epoch-millisecond `BIGINT` values by
+default. Native PostgreSQL timestamp storage is an explicit per-column choice:
+
+```kotlin
+class AuditRecord(
+    val occurredAt: Instant,
+    val archivedAt: Instant?,
+) : UuidData()
+
+object AuditRecords : UuidDataTable<AuditRecord>("audit_records") {
+    val occurredAt = column(AuditRecord::occurredAt)
+    val archivedAt = column(
+        AuditRecord::archivedAt,
+        storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE,
+    )
+}
+```
+
+Both declarations expose `Column<Instant>` (or `Column<Instant?>`). `BIGINT` storage has millisecond
+precision; `TIMESTAMP WITH TIME ZONE` uses PostgreSQL's native temporal representation.
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
 
