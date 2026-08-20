@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.4")
+implementation("com.github.TekFive:keep:v1.0.5")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -132,9 +132,13 @@ numeric types, booleans, UUIDs, binary values, JFK JSON values, `DataEnum` value
 lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `default`, `index`,
 `uniqueIndex`, and `check` can still be chained onto the resulting column.
 
-Long foreign keys have the same property-based naming support through
-`fkey(Order::customerId, CustomersTable)`. Nullable `Long?` properties produce nullable foreign-key
-columns, while standard KEEP foreign-key naming, indexing, and cascade behavior are preserved.
+Scalar `DataEnum` properties use an `_id` suffix by default (`status` becomes `status_id`); an
+explicit `name` is used unchanged.
+
+Long and UUID foreign keys have the same property-based naming support through
+`fkey(Order::customerId, CustomersTable)`. Nullable `Long?` and `UUID?` properties produce nullable
+foreign-key columns, while standard KEEP foreign-key naming, indexing, and cascade behavior are
+preserved.
 Timestamp columns can likewise be declared as `timestamp(AuditRecord::createdAt)` or from a nullable
 `Long?` property; the name is derived and KEEP's positive timestamp constraint is retained.
 

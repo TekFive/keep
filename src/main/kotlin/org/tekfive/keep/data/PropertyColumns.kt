@@ -32,6 +32,10 @@ import kotlin.reflect.KProperty1
 private val acronymBoundary = Regex("([A-Z]+)([A-Z][a-z])")
 private val wordBoundary = Regex("([a-z0-9])([A-Z])")
 
+@PublishedApi
+internal fun KProperty1<*, *>.standardIdColumnName(): String =
+    standardColumnName().let { if (it.endsWith("_id")) it else "${it}_id" }
+
 /** Converts a Kotlin property name such as `minimumStartAt` or `URLValue` to PostgreSQL snake case. */
 fun KProperty1<*, *>.standardColumnName(): String = name
     .trimStart('_')
@@ -269,7 +273,7 @@ fun <D> Table.column(
 @JvmName("columnDataEnum")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, E>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdColumnName(),
     encrypted: Boolean = false,
 ): Column<E> where E : Enum<E>, E : DataEnum =
     if (encrypted) encryptedDataEnum(name) else dataEnum(name)
@@ -277,7 +281,7 @@ inline fun <D, reified E> Table.column(
 @JvmName("columnNullableDataEnum")
 inline fun <D, reified E> Table.column(
     property: KProperty1<D, E?>,
-    name: String = property.standardColumnName(),
+    name: String = property.standardIdColumnName(),
     encrypted: Boolean = false,
 ): Column<E?> where E : Enum<E>, E : DataEnum =
     (if (encrypted) encryptedDataEnum<E>(name) else dataEnum<E>(name)).nullable()

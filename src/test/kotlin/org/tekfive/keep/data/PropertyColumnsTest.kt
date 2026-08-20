@@ -131,6 +131,21 @@ private object PropertyForeignKeyTable : Table("property_foreign_keys") {
     )
 }
 
+private class PropertyUuidForeignKeyModel(
+    val uuidSimpleId: UUID,
+    val optionalUuidSimpleId: UUID?,
+)
+
+private object PropertyUuidForeignKeyTable : Table("property_uuid_foreign_keys") {
+    val uuidSimpleId = fkey(PropertyUuidForeignKeyModel::uuidSimpleId, UuidSimpleTable)
+    val optionalUuidSimpleId = fkey(
+        PropertyUuidForeignKeyModel::optionalUuidSimpleId,
+        UuidSimpleTable,
+        ReferenceOption.NO_ACTION,
+        name = "fallback_uuid_simple_id",
+    )
+}
+
 class PropertyColumnsTest {
 
     @Test
@@ -173,6 +188,8 @@ class PropertyColumnsTest {
         assertEquals("JSONB", PropertyColumnTable.jsonObject.columnType.sqlType())
         assertEquals("JSONB", PropertyColumnTable.jsonArray.columnType.sqlType())
         assertEquals("INTEGER", PropertyColumnTable.status.columnType.sqlType())
+        assertEquals("status_id", PropertyColumnTable.status.name)
+        assertEquals("optional_status_id", PropertyColumnTable.optionalStatus.name)
         assertTrue(PropertyColumnTable.optionalStatus.columnType.nullable)
         assertEquals("TEXT[]", PropertyColumnTable.tags.columnType.sqlType())
         assertEquals("INTEGER[]", PropertyColumnTable.statuses.columnType.sqlType())
@@ -211,6 +228,32 @@ class PropertyColumnsTest {
     }
 
     @Test
+    fun `configures conventional UUID foreign keys from properties`() {
+        assertEquals("uuid_simple_id", PropertyUuidForeignKeyTable.uuidSimpleId.name)
+        assertEquals("fallback_uuid_simple_id", PropertyUuidForeignKeyTable.optionalUuidSimpleId.name)
+        assertFalse(PropertyUuidForeignKeyTable.uuidSimpleId.columnType.nullable)
+        assertTrue(PropertyUuidForeignKeyTable.optionalUuidSimpleId.columnType.nullable)
+        assertEquals(
+            "property_uuid_foreign_keys_uuid_simple_id_fk",
+            PropertyUuidForeignKeyTable.uuidSimpleId.foreignKey?.customFkName,
+        )
+        assertEquals(
+            "property_uuid_foreign_keys_fallback_uuid_simple_id_fk",
+            PropertyUuidForeignKeyTable.optionalUuidSimpleId.foreignKey?.customFkName,
+        )
+        assertTrue(
+            PropertyUuidForeignKeyTable.indices.any {
+                it.indexName == "property_uuid_foreign_keys_uuid_simple_id_ix"
+            }
+        )
+        assertTrue(
+            PropertyUuidForeignKeyTable.indices.any {
+                it.indexName == "property_uuid_foreign_keys_fallback_uuid_simple_id_ix"
+            }
+        )
+    }
+
+    @Test
     fun `supports case insensitive text and validates incompatible string options`() {
         val table = object : Table("property_column_options") {}
 
@@ -230,6 +273,15 @@ class PropertyColumnsTest {
         assertFailsWith<IllegalArgumentException> {
             table.column(PropertyColumnModel::content, encrypted = true, maxSize = 100)
         }
+    }
+
+    @Test
+    fun `preserves an explicit data enum column name`() {
+        val table = object : Table("property_enum_name") {}
+
+        val status = table.column(PropertyColumnModel::status, name = "state")
+
+        assertEquals("state", status.name)
     }
 
     @Suppress("PropertyName", "unused")

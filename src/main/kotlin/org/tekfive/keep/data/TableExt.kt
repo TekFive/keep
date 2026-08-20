@@ -51,6 +51,24 @@ fun Table.fkey(
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
 ): Column<UUID> = uuidFkey(name, target, onDelete)
 
+/** Creates an indexed UUID foreign key whose name is derived from [property]. */
+@JvmName("fkeyUuidProperty")
+fun <D> Table.fkey(
+    property: KProperty1<D, UUID>,
+    target: UuidDataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+    name: String = property.standardColumnName(),
+): Column<UUID> = fkey(name, target, onDelete)
+
+/** Nullable counterpart to [fkey] for a nullable UUID property. */
+@JvmName("fkeyNullableUuidProperty")
+fun <D> Table.fkey(
+    property: KProperty1<D, UUID?>,
+    target: UuidDataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+    name: String = property.standardColumnName(),
+): Column<UUID?> = fkey(name, target, onDelete).nullable()
+
 fun Table.timestamp(name: String): Column<Long> {
     return long(name).check("${tableName}_${name}_positive") { it greater 0L }
 }
