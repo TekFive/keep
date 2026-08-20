@@ -6,11 +6,31 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.greater
 import org.tekfive.keep.text.citext
 import java.util.UUID
+import kotlin.jvm.JvmName
+import kotlin.reflect.KProperty1
 
 /** Creates an indexed long column that references [target]'s `id` as a named foreign key. */
 fun Table.fkey(name: String, target: DataTable<*>, onDelete: ReferenceOption = ReferenceOption.CASCADE): Column<Long> {
     return long(name).references(target.id, fkName = "${tableName}_${name}_fk", onDelete = onDelete).indexWithStandardName()
 }
+
+/** Creates an indexed long foreign key whose name is derived from [property]. */
+@JvmName("fkeyLongProperty")
+fun <D> Table.fkey(
+    property: KProperty1<D, Long>,
+    target: DataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+    name: String = property.standardColumnName(),
+): Column<Long> = fkey(name, target, onDelete)
+
+/** Nullable counterpart to [fkey] for a nullable long property. */
+@JvmName("fkeyNullableLongProperty")
+fun <D> Table.fkey(
+    property: KProperty1<D, Long?>,
+    target: DataTable<*>,
+    onDelete: ReferenceOption = ReferenceOption.CASCADE,
+    name: String = property.standardColumnName(),
+): Column<Long?> = fkey(name, target, onDelete).nullable()
 
 /** Creates an indexed UUID column that references a [UuidDataTable] primary key. */
 fun Table.uuidFkey(
@@ -34,6 +54,21 @@ fun Table.fkey(
 fun Table.timestamp(name: String): Column<Long> {
     return long(name).check("${tableName}_${name}_positive") { it greater 0L }
 }
+
+/** Creates a positive timestamp column whose name is derived from [property]. */
+@JvmName("timestampLongProperty")
+fun <D> Table.timestamp(
+    property: KProperty1<D, Long>,
+    name: String = property.standardColumnName(),
+): Column<Long> = timestamp(name)
+
+/** Nullable counterpart to [timestamp] for a nullable long property. */
+@JvmName("timestampNullableLongProperty")
+fun <D> Table.timestamp(
+    property: KProperty1<D, Long?>,
+    name: String = property.standardColumnName(),
+): Column<Long?> = timestamp(name).nullable()
+
 fun Table.createdAt() = timestamp("created_at")
 
 fun Table.updatedAt() = timestamp("updated_at")

@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.3")
+implementation("com.github.TekFive:keep:v1.0.4")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -100,6 +100,43 @@ val patient = PatientsTable.create(
 patient.displayName = "Ada Byron"
 PatientsTable.update(patient)
 ```
+
+Columns can also be configured directly from Kotlin property references. `column` derives
+the PostgreSQL column name (`displayName` becomes `display_name`), chooses the column type, and
+preserves the property's nullability. It works on any Exposed `Table`, not only `DataTable`.
+
+```kotlin
+class Patient(
+    val mrn: String,
+    var displayName: String,
+    var notes: String?,
+    var active: Boolean,
+) : Data()
+
+object PatientsTable : DataTable<Patient>("patients") {
+    val mrn = column(Patient::mrn, maxSize = 64).uniqueIndex()
+    val displayName = column(
+        Patient::displayName,
+        maxSize = 255,
+        caseInsensitive = true,
+    )
+    val notes = column(Patient::notes)
+    val active = column(Patient::active)
+}
+```
+
+Strings use `TEXT` by default, or `VARCHAR` when `maxSize` is provided. Supported options include
+an explicit `name`, case-insensitive `CITEXT`, encrypted storage for supported types, timestamp
+semantics for `Long`, decimal precision and scale, and foreign-key references. Overloads also cover
+numeric types, booleans, UUIDs, binary values, JFK JSON values, `DataEnum` values, string/enum
+lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `default`, `index`,
+`uniqueIndex`, and `check` can still be chained onto the resulting column.
+
+Long foreign keys have the same property-based naming support through
+`fkey(Order::customerId, CustomersTable)`. Nullable `Long?` properties produce nullable foreign-key
+columns, while standard KEEP foreign-key naming, indexing, and cascade behavior are preserved.
+Timestamp columns can likewise be declared as `timestamp(AuditRecord::createdAt)` or from a nullable
+`Long?` property; the name is derived and KEEP's positive timestamp constraint is retained.
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
 
