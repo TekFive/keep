@@ -121,23 +121,13 @@ abstract class PagedQuery(
     }
 
     fun execute(): JsonObject {
-        val request = PageRequest.from(parameters)
-        val searchPredicate = request.search?.let { buildSearch(it) }
-        val predicates = listOfNotNull(basePredicate()) + filters(parameters) + listOfNotNull(searchPredicate)
-        val where = predicates.reduceOrNull { acc, op -> acc and op } ?: Op.TRUE
-        val order = resolveSort(request.sort)
-        val total = source().selectAll().where(where).count().toInt()
-        val offset = (request.page - 1) * request.size
-        val rows = source().selectAll().where(where)
-            .orderBy(*(order.toTypedArray()))
-            .limit(request.size).offset(offset.toLong())
-            .toList()
+        val page = executePageRows { it }
         return json {
-            "total" set total
-            "page" set request.page
-            "size" set request.size
+            "total" set page.total
+            "page" set page.page
+            "size" set page.size
             "data" set jsonArray {
-                rows.forEach { row ->
+                page.data.forEach { row ->
                     addObject {
                         columns.forEach { col ->
                             col.name set JsonValue.toJsonValue(col.serialize(row))
@@ -146,6 +136,26 @@ abstract class PagedQuery(
                 }
             }
         }
+    }
+
+    /**
+     * Executes the configured count and page queries and maps each selected row with [mapRow].
+     * Subclasses can use this hook to return typed results without duplicating paging behavior.
+     * Must be called inside a database transaction.
+     */
+    protected fun <T> executePageRows(mapRow: (ResultRow) -> T): DtoPage<T> {
+        val request = PageRequest.from(parameters)
+        val searchPredicate = request.search?.let { buildSearch(it) }
+        val predicates = listOfNotNull(basePredicate()) + filters(parameters) + listOfNotNull(searchPredicate)
+        val where = predicates.reduceOrNull { acc, op -> acc and op } ?: Op.TRUE
+        val order = resolveSort(request.sort)
+        val total = source().selectAll().where(where).count().toInt()
+        val offset = (request.page - 1) * request.size
+        val data = source().selectAll().where(where)
+            .orderBy(*(order.toTypedArray()))
+            .limit(request.size).offset(offset.toLong())
+            .map(mapRow)
+        return DtoPage(total = total, page = request.page, size = request.size, data = data)
     }
 
     private fun buildSearch(term: String): Op<Boolean> {

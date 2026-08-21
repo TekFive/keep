@@ -107,14 +107,7 @@ abstract class UuidDataTable<D : UuidData>(
         validateUpdateColumns(requestedColumns)
         val columnsToUpdate = requestedColumns.toMutableSet()
 
-        if (data is TrackUpdatedAt && columnsToUpdate.none { it.name == "updated_at" }) {
-            val updatedAtColumn = columns.firstOrNull { it.name == "updated_at" }
-            check(updatedAtColumn != null) {
-                "Data implements RecordUpdatedAt but $tableName has no updated_at column."
-            }
-            data.updatedAt = System.currentTimeMillis()
-            columnsToUpdate += updatedAtColumn
-        }
+        addTrackedUpdatedAtColumn(data, columnsToUpdate)
 
         val snapshotProperties = snapshotPropertiesFor(columnsToUpdate)
         return db {
