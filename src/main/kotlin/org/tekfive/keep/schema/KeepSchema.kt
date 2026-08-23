@@ -1,6 +1,7 @@
 package org.tekfive.keep.schema
 
 import org.jetbrains.exposed.v1.core.Table
+import org.tekfive.keep.data.DataTableSchemaHooks
 
 /**
  * The application-owned PostgreSQL objects that KEEP should manage.
@@ -34,4 +35,11 @@ abstract class KeepSchema(
 
     /** SQL emitted after tables, constraints, and indexes but before views. */
     open val afterTablesSql: List<String> = emptyList()
+
+    /** Schema-level PostgreSQL objects. Table-owned objects can also be declared through table hooks. */
+    open val postgresObjects: List<PostgresSchemaObject> = emptyList()
+
+    /** Every first-class PostgreSQL object declared by the schema or one of its tables. */
+    val declaredPostgresObjects: List<PostgresSchemaObject>
+        get() = postgresObjects + tables.filterIsInstance<DataTableSchemaHooks>().flatMap { it.postgresObjects }
 }

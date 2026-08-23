@@ -43,6 +43,9 @@ object PostgresFreshInstallGenerator {
             statements += tableDdl.indexStatements
 
             statements += tableHooks.flatMap { it.customIndices }
+            val postgresContext = PostgresRenderContext(keepSchema.schemaName, targetVersion)
+            statements += orderedPostgresObjects(keepSchema.declaredPostgresObjects)
+                .flatMap { it.createStatements(postgresContext) }
             statements += tableHooks.flatMap { it.postSchemaCreateSql }
             statements += keepSchema.afterTablesSql
 
@@ -130,6 +133,25 @@ object PostgresFreshInstallGenerator {
         require(keepSchema.afterTablesSql.all(String::isNotBlank)) { "afterTablesSql must not contain blank SQL" }
         require(keepSchema.views.all { it.query.isNotBlank() }) { "View queries must not be blank" }
 
+        val postgresObjects = keepSchema.declaredPostgresObjects
+        require(postgresObjects.all { it.table in keepSchema.tables }) {
+            "PostgreSQL schema objects may only target tables declared by KeepSchema"
+        }
+        val duplicateObjects = postgresObjects
+            .groupingBy { Triple(it::class, it.table, it.name.lowercase(Locale.ROOT)) }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        require(duplicateObjects.isEmpty()) { "KeepSchema contains duplicate PostgreSQL objects: $duplicateObjects" }
+        val duplicateFunctions = postgresObjects.filterIsInstance<PostgresRowTriggerDefinition>()
+            .groupingBy { it.functionName.lowercase(Locale.ROOT) }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        require(duplicateFunctions.isEmpty()) {
+            "KeepSchema contains duplicate PostgreSQL trigger function names: $duplicateFunctions"
+        }
+
         val duplicateSequenceNames = keepSchema.sequenceDefinitions
             .groupingBy { it.name.lowercase(Locale.ROOT) }
             .eachCount()
@@ -216,6 +238,14 @@ object PostgresFreshInstallGenerator {
     private fun PostgresSequenceDefinition.hasOptions(): Boolean =
         startWith != null || incrementBy != null || minValue != null || maxValue != null ||
             cycle != null || cache != null
+
+    private fun orderedPostgresObjects(objects: List<PostgresSchemaObject>): List<PostgresSchemaObject> =
+        objects.sortedBy {
+            when (it) {
+                is PostgresUniqueConstraintDefinition -> 0
+                is PostgresRowTriggerDefinition -> 1
+            }
+        }
 
     private data class RenderedTables(
         val sequenceStatements: List<String>,

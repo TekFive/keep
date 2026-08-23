@@ -274,6 +274,68 @@ PostgresFreshInstallGenerator.generate(
 
 The target PostgreSQL version is explicit and defaults to PostgreSQL 16, making dialect decisions deterministic. Generated scripts can be checked into source control or packaged with an application.
 
+### Typed PostgreSQL Constraints and Trigger Policies
+
+Use Exposed's `check` and filtered `uniqueIndex` APIs for typed checks and partial indexes. KEEP's
+`postgresObjects` DSL adds real PostgreSQL `UNIQUE` constraints and row-trigger policies while
+retaining the column types declared by the table:
+
+```kotlin
+object PipelineVersions : DataTable<PipelineVersion>("pipeline_versions") {
+    val pipelineId = long("pipeline_id")
+    val version = integer("version")
+    val status = dataEnum<PipelineVersionStatus>("status_id")
+    val name = varchar("name", 255)
+
+    init {
+        check("pipeline_versions_version_check") { version greater 0 }
+        uniqueIndex("pipeline_versions_one_draft_ix", pipelineId) {
+            status eq PipelineVersionStatus.DRAFT
+        }
+    }
+
+    override val postgresObjects = postgresObjects {
+        uniqueConstraint("pipeline_versions_pipeline_version_uq", pipelineId, version)
+
+        rowTrigger("pipeline_versions_guard_published") {
+            before(PostgresTriggerEvent.UPDATE, PostgresTriggerEvent.DELETE)
+
+            onDelete {
+                require(old[status] eq PipelineVersionStatus.DRAFT) {
+                    "published pipeline versions cannot be deleted"
+                }
+            }
+
+            onUpdate {
+                transition(status) {
+                    from(PipelineVersionStatus.DRAFT)
+                        .allows(PipelineVersionStatus.DRAFT, PipelineVersionStatus.PUBLISHED)
+                        .otherwise("a draft must be published before retirement")
+                }
+                immutableWhen(
+                    old[status] neq PipelineVersionStatus.DRAFT,
+                    pipelineId,
+                    version,
+                    name,
+                    message = "published pipeline versions are immutable",
+                )
+            }
+        }
+    }
+}
+```
+
+`old[column]` and `new[column]` preserve the column's Kotlin type, including `DataEnum` storage.
+Delete handlers expose only `old`, insert handlers expose only `new`, and update handlers expose
+both. `immutableWhen` uses PostgreSQL's null-safe `IS DISTINCT FROM` row comparison. The DSL
+generates and orders the PL/pgSQL function and trigger automatically; `sql(...)` is available as
+an explicit escape hatch inside a handler.
+
+Typed objects participate in fresh-install generation, `AppSchema.create()`, and migration
+comparison. KEEP creates missing objects and replaces changed unique constraints, trigger
+functions, or trigger definitions. Re-running migration planning after applying the generated SQL
+is idempotent.
+
 ### PostgreSQL Migration Generation
 
 `PostgresMigrationGenerator` compares a `KeepSchema` with an existing PostgreSQL schema. It produces a reviewable SQL file without applying it to the database.

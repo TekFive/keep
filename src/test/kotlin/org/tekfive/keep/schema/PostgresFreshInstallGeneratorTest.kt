@@ -75,6 +75,9 @@ private class FreshHookData(val label: String) : Data()
 
 private object FreshHookTable : DataTable<FreshHookData>("fresh_hook_table") {
     val label = varchar("label", 100)
+    override val postgresObjects = postgresObjects {
+        uniqueConstraint("fresh_hook_label_uq", label)
+    }
     override val customTypes = listOf("CREATE TYPE fresh_hook_type AS ENUM ('one', 'two')")
     override val customIndices = listOf("CREATE INDEX fresh_hook_label_idx ON fresh_hook_table(label)")
     override val postSchemaCreateSql = listOf("COMMENT ON TABLE fresh_hook_table IS 'hook table'")
@@ -121,6 +124,7 @@ class PostgresFreshInstallGeneratorOfflineTest {
         val sequenceIndices = statements.indices.filter { statements[it].startsWith("CREATE SEQUENCE") }
         val tableIndex = statements.indexOfFirst { it.startsWith("CREATE TABLE") }
         val customIndex = statements.indexOfFirst { it.contains("fresh_hook_label_idx") }
+        val typedConstraint = statements.indexOfFirst { it.contains("fresh_hook_label_uq") }
         val commentIndex = statements.indexOfFirst { it.startsWith("COMMENT ON TABLE") }
 
         assertEquals(1, sequenceIndices.size)
@@ -128,7 +132,8 @@ class PostgresFreshInstallGeneratorOfflineTest {
         assertTrue(typeIndex < sequenceIndices.single())
         assertTrue(sequenceIndices.single() < tableIndex)
         assertTrue(tableIndex < customIndex)
-        assertTrue(customIndex < commentIndex)
+        assertTrue(customIndex < typedConstraint)
+        assertTrue(typedConstraint < commentIndex)
     }
 
     @Test

@@ -11,6 +11,12 @@ import org.jetbrains.exposed.v1.jdbc.vendors.currentDialectMetadata
 import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
 import org.tekfive.keep.db.dbConnection
 import org.tekfive.keep.schema.KeepSchema
+import org.tekfive.keep.schema.PostgresRenderContext
+import org.tekfive.keep.schema.PostgresRowTriggerDefinition
+import org.tekfive.keep.schema.PostgresSchemaObject
+import org.tekfive.keep.schema.PostgresTriggerEvent
+import org.tekfive.keep.schema.PostgresTriggerTiming
+import org.tekfive.keep.schema.PostgresUniqueConstraintDefinition
 import org.tekfive.keep.schema.PostgresViewDefinition
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -105,6 +111,9 @@ object PostgresMigrationGenerator {
                 *keepSchema.tables.toTypedArray(),
                 withLogs = false,
             ).flatMap(::expandPostgresAlterTableStatement)
+            val recreatedIndexNames = exposedTableStatements.mapNotNull { sql ->
+                CREATE_INDEX_NAME.find(sql)?.groupValues?.get(1)?.unqualifiedIdentifier()
+            }.toSet()
 
             postgresColumnTypeStatements(connection, keepSchema.tables, inventory).forEach {
                 candidates += candidate(it)
@@ -112,8 +121,13 @@ object PostgresMigrationGenerator {
             exposedTableStatements
                 // PostgreSQL-native comparison below replaces Exposed's incomplete type detection.
                 .filterNot { destructiveChangeFor(it) == DestructivePostgresMigrationChange.ALTER_COLUMN_TYPE }
+                // Exposed can misclassify multiple partial indexes on the same columns, and it
+                // does not know about KEEP's first-class PostgreSQL constraints.
+                .filterNot { dropsDeclaredPostgresObject(it, keepSchema, recreatedIndexNames) }
                 .forEach { candidates += candidate(it) }
         }
+
+        candidates += planPostgresObjects(connection, keepSchema)
 
         candidates += postTableViewStatements
 
@@ -385,7 +399,235 @@ object PostgresMigrationGenerator {
         require(duplicates.isEmpty()) {
             "PostgreSQL tables, views, and sequences share a namespace; duplicate KeepSchema names: $duplicates"
         }
+
+        val postgresObjects = keepSchema.declaredPostgresObjects
+        require(postgresObjects.all { it.table in keepSchema.tables }) {
+            "PostgreSQL schema objects may only target tables declared by KeepSchema"
+        }
+        val duplicateObjects = postgresObjects
+            .groupingBy { Triple(it::class, it.table, it.name.lowercase(Locale.ROOT)) }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        require(duplicateObjects.isEmpty()) { "KeepSchema contains duplicate PostgreSQL objects: $duplicateObjects" }
+        val duplicateFunctions = postgresObjects.filterIsInstance<PostgresRowTriggerDefinition>()
+            .groupingBy { it.functionName.lowercase(Locale.ROOT) }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        require(duplicateFunctions.isEmpty()) {
+            "KeepSchema contains duplicate PostgreSQL trigger function names: $duplicateFunctions"
+        }
     }
+
+    private fun planPostgresObjects(
+        connection: Connection,
+        keepSchema: KeepSchema,
+    ): List<CandidateStatement> {
+        val context = PostgresRenderContext(keepSchema.schemaName)
+        return buildList {
+            keepSchema.declaredPostgresObjects
+                .sortedBy { if (it is PostgresUniqueConstraintDefinition) 0 else 1 }
+                .forEach { definition ->
+                    when (definition) {
+                        is PostgresUniqueConstraintDefinition ->
+                            addAll(planUniqueConstraint(connection, context, definition))
+                        is PostgresRowTriggerDefinition ->
+                            addAll(planRowTrigger(connection, context, definition))
+                    }
+                }
+        }
+    }
+
+    private fun dropsDeclaredPostgresObject(
+        sql: String,
+        keepSchema: KeepSchema,
+        recreatedIndexNames: Set<String>,
+    ): Boolean {
+        val droppedIndex = DROP_INDEX_NAME.find(sql)?.groupValues?.get(1)?.unqualifiedIdentifier()
+        if (droppedIndex != null) {
+            if (recreatedIndexNames.any { it.equals(droppedIndex, ignoreCase = true) }) return false
+            val declaredIndices = keepSchema.tables.flatMap { table -> table.indices.map { it.indexName } }
+            return declaredIndices.any { it.equals(droppedIndex, ignoreCase = true) }
+        }
+
+        val droppedConstraint = DROP_CONSTRAINT_NAME.find(sql)?.groupValues?.get(1)?.unqualifiedIdentifier()
+            ?: return false
+        return keepSchema.declaredPostgresObjects
+            .filterIsInstance<PostgresUniqueConstraintDefinition>()
+            .any { it.name.equals(droppedConstraint, ignoreCase = true) }
+    }
+
+    private fun planUniqueConstraint(
+        connection: Connection,
+        context: PostgresRenderContext,
+        definition: PostgresUniqueConstraintDefinition,
+    ): List<CandidateStatement> {
+        val existing = readConstraint(
+            connection = connection,
+            schemaName = context.schemaName,
+            tableName = definition.table.nameInDatabaseCaseUnquoted(),
+            constraintName = definition.name,
+        ) ?: return definition.createStatements(context).map(::candidate)
+
+        require(existing.type == "u") {
+            "PostgreSQL object ${definition.name} on ${definition.table.tableName} exists as " +
+                "constraint type ${existing.type}, not UNIQUE"
+        }
+        val desiredColumns = definition.columns.map { it.nameUnquoted() }
+        if (existing.columns == desiredColumns) return emptyList()
+
+        val drop = "ALTER TABLE ${context.tableName(definition.table)} " +
+            "DROP CONSTRAINT ${context.identifier(definition.name)}"
+        return listOf(candidate(drop)) + definition.createStatements(context).map(::candidate)
+    }
+
+    private fun planRowTrigger(
+        connection: Connection,
+        context: PostgresRenderContext,
+        definition: PostgresRowTriggerDefinition,
+    ): List<CandidateStatement> = buildList {
+        val desiredBody = definition.functionBody(context).normalizedFunctionBody()
+        val existingFunction = readTriggerFunction(connection, context.schemaName, definition.functionName)
+        if (existingFunction == null) {
+            add(candidate(definition.createFunctionStatement(context)))
+        } else {
+            require(existingFunction.language == "plpgsql" && existingFunction.returnsTrigger) {
+                "Function ${context.qualified(definition.functionName)} exists but is not a PL/pgSQL trigger function"
+            }
+            if (existingFunction.body.normalizedFunctionBody() != desiredBody) {
+                add(candidate(definition.createFunctionStatement(context)))
+            }
+        }
+
+        val existingTrigger = readRowTrigger(
+            connection = connection,
+            schemaName = context.schemaName,
+            tableName = definition.table.nameInDatabaseCaseUnquoted(),
+            triggerName = definition.name,
+        )
+        val desiredType = triggerType(definition.timing, definition.events)
+        val triggerMatches = existingTrigger != null &&
+            existingTrigger.type == desiredType &&
+            existingTrigger.functionSchema == context.schemaName &&
+            existingTrigger.functionName == definition.functionName
+
+        if (!triggerMatches) {
+            if (existingTrigger != null) {
+                add(
+                    candidate(
+                        "DROP TRIGGER ${context.identifier(definition.name)} " +
+                            "ON ${context.tableName(definition.table)}"
+                    )
+                )
+            }
+            add(candidate(definition.createTriggerStatement(context)))
+        }
+    }
+
+    private fun readConstraint(
+        connection: Connection,
+        schemaName: String,
+        tableName: String,
+        constraintName: String,
+    ): ExistingConstraint? = connection.prepareStatement(
+        """
+        SELECT c.contype::text,
+               array_agg(a.attname ORDER BY key_columns.ordinality)
+        FROM pg_constraint c
+        JOIN pg_class relation ON relation.oid = c.conrelid
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        LEFT JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS key_columns(attnum, ordinality) ON TRUE
+        LEFT JOIN pg_attribute a ON a.attrelid = relation.oid AND a.attnum = key_columns.attnum
+        WHERE namespace.nspname = ? AND relation.relname = ? AND c.conname = ?
+        GROUP BY c.oid, c.contype
+        """.trimIndent()
+    ).use { statement ->
+        statement.setString(1, schemaName)
+        statement.setString(2, tableName)
+        statement.setString(3, constraintName)
+        statement.executeQuery().use { result ->
+            if (!result.next()) return@use null
+            val columns = (result.getArray(2)?.array as? Array<*>)
+                .orEmpty()
+                .map { it.toString() }
+            ExistingConstraint(result.getString(1), columns)
+        }
+    }
+
+    private fun readTriggerFunction(
+        connection: Connection,
+        schemaName: String,
+        functionName: String,
+    ): ExistingTriggerFunction? = connection.prepareStatement(
+        """
+        SELECT procedure.prosrc,
+               language.lanname,
+               procedure.prorettype = 'pg_catalog.trigger'::regtype
+        FROM pg_proc procedure
+        JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+        JOIN pg_language language ON language.oid = procedure.prolang
+        WHERE namespace.nspname = ? AND procedure.proname = ? AND procedure.pronargs = 0
+        """.trimIndent()
+    ).use { statement ->
+        statement.setString(1, schemaName)
+        statement.setString(2, functionName)
+        statement.executeQuery().use { result ->
+            if (!result.next()) return@use null
+            ExistingTriggerFunction(
+                body = result.getString(1),
+                language = result.getString(2),
+                returnsTrigger = result.getBoolean(3),
+            )
+        }
+    }
+
+    private fun readRowTrigger(
+        connection: Connection,
+        schemaName: String,
+        tableName: String,
+        triggerName: String,
+    ): ExistingRowTrigger? = connection.prepareStatement(
+        """
+        SELECT trigger.tgtype,
+               function_namespace.nspname,
+               function.proname
+        FROM pg_trigger trigger
+        JOIN pg_class relation ON relation.oid = trigger.tgrelid
+        JOIN pg_namespace relation_namespace ON relation_namespace.oid = relation.relnamespace
+        JOIN pg_proc function ON function.oid = trigger.tgfoid
+        JOIN pg_namespace function_namespace ON function_namespace.oid = function.pronamespace
+        WHERE relation_namespace.nspname = ?
+          AND relation.relname = ?
+          AND trigger.tgname = ?
+          AND NOT trigger.tgisinternal
+        """.trimIndent()
+    ).use { statement ->
+        statement.setString(1, schemaName)
+        statement.setString(2, tableName)
+        statement.setString(3, triggerName)
+        statement.executeQuery().use { result ->
+            if (!result.next()) return@use null
+            ExistingRowTrigger(
+                type = result.getInt(1),
+                functionSchema = result.getString(2),
+                functionName = result.getString(3),
+            )
+        }
+    }
+
+    private fun triggerType(
+        timing: PostgresTriggerTiming,
+        events: Set<PostgresTriggerEvent>,
+    ): Int = TRIGGER_TYPE_ROW or
+        (if (timing == PostgresTriggerTiming.BEFORE) TRIGGER_TYPE_BEFORE else 0) or
+        events.fold(0) { result, event ->
+            result or when (event) {
+                PostgresTriggerEvent.INSERT -> TRIGGER_TYPE_INSERT
+                PostgresTriggerEvent.UPDATE -> TRIGGER_TYPE_UPDATE
+                PostgresTriggerEvent.DELETE -> TRIGGER_TYPE_DELETE
+            }
+        }
 
     private fun validateTableSchemas(connection: Connection, keepSchema: KeepSchema) {
         val currentSchema = connection.createStatement().use { statement ->
@@ -538,6 +780,23 @@ object PostgresMigrationGenerator {
         val sqlType: String,
     )
 
+    private data class ExistingConstraint(
+        val type: String,
+        val columns: List<String>,
+    )
+
+    private data class ExistingTriggerFunction(
+        val body: String,
+        val language: String,
+        val returnsTrigger: Boolean,
+    )
+
+    private data class ExistingRowTrigger(
+        val type: Int,
+        val functionSchema: String,
+        val functionName: String,
+    )
+
     private enum class ExistingObjectKind(
         val postgresCode: String,
         val description: String,
@@ -560,8 +819,16 @@ object PostgresMigrationGenerator {
     }
 
     private const val POSTGRES_IDENTIFIER_BYTES = 63
+    private const val TRIGGER_TYPE_ROW = 1
+    private const val TRIGGER_TYPE_BEFORE = 2
+    private const val TRIGGER_TYPE_INSERT = 4
+    private const val TRIGGER_TYPE_DELETE = 8
+    private const val TRIGGER_TYPE_UPDATE = 16
     private val WHITESPACE = Regex("\\s+")
 }
+
+private fun String.normalizedFunctionBody(): String =
+    replace("\r\n", "\n").trim()
 
 internal fun destructiveChangeFor(sql: String): DestructivePostgresMigrationChange? {
     val normalized = sql.trimStart().replace(Regex("\\s+"), " ").uppercase(Locale.ROOT)
@@ -655,3 +922,10 @@ private val ALTER_COLUMN_TYPE = Regex("\\bALTER\\s+COLUMN\\s+[^;]+?\\s+(?:SET\\s
 private val DELETE_DATA = Regex("(?:^|\\s)DELETE\\s+FROM\\s")
 private val ALTER_COLUMN = Regex("(?i)\\bALTER\\s+COLUMN\\b")
 private val DOLLAR_QUOTE = Regex("\\$[A-Za-z_][A-Za-z0-9_]*\\$|\\$\\$")
+private val DROP_INDEX_NAME = Regex("(?i)\\bDROP\\s+INDEX(?:\\s+IF\\s+EXISTS)?\\s+([^\\s,;]+)")
+private val CREATE_INDEX_NAME =
+    Regex("(?i)\\bCREATE\\s+(?:UNIQUE\\s+)?INDEX(?:\\s+IF\\s+NOT\\s+EXISTS)?\\s+([^\\s,;]+)")
+private val DROP_CONSTRAINT_NAME = Regex("(?i)\\bDROP\\s+CONSTRAINT(?:\\s+IF\\s+EXISTS)?\\s+([^\\s,;]+)")
+
+private fun String.unqualifiedIdentifier(): String =
+    substringAfterLast('.').trim().removeSurrounding("\"")
