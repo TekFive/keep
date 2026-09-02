@@ -65,12 +65,13 @@ class JobRecordCoordinatorIntegrationTest {
     private fun createConfig(
         pollSeconds: Int = 1,
         dispatchCount: Int = 2,
+        maxEstimatedRuntimeRecords: Int = 0,
     ): JobConfiguration {
         return object : JobConfiguration {
             override val dispatchCount: Int = dispatchCount
             override val pollSeconds: Int = pollSeconds
             override val maximumCandidatesBuffer: Int = dispatchCount * 2
-            override val maxEstimatedRuntimeRecords: Int = 0
+            override val maxEstimatedRuntimeRecords: Int = maxEstimatedRuntimeRecords
             override val minSecondsBetweenJobCheckin: Int = 30
             override val defaultMinSecondsBetweenJobRetry: Int = 0
             override val minSaveLogLevel: org.tekfive.keep.job.db.JobRecordLogLevel? = null
@@ -166,6 +167,41 @@ class JobRecordCoordinatorIntegrationTest {
                 stmt.setLong(6, endedAt)
                 stmt.setLong(7, endedAt)
                 stmt.executeUpdate()
+            }
+        }
+    }
+
+    private fun insertRunningJob(typeId: String, systemIdentifier: String, startedAt: Long): Long {
+        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
+            conn.prepareStatement(
+                """
+                    INSERT INTO job_records (
+                        type, created_at, priority, attempt, state, scheduled_job, system_identifier, started_at
+                    ) VALUES (?, ?, 0, 1, ?, FALSE, ?, ?)
+                    RETURNING id
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, typeId)
+                stmt.setLong(2, startedAt - 1_000L)
+                stmt.setInt(3, JobState.RUNNING.id)
+                stmt.setString(4, systemIdentifier)
+                stmt.setLong(5, startedAt)
+                stmt.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    return rs.getLong(1)
+                }
+            }
+        }
+    }
+
+    private fun countJobs(typeId: String): Int {
+        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
+            conn.prepareStatement("SELECT COUNT(*) FROM job_records WHERE type = ?").use { stmt ->
+                stmt.setString(1, typeId)
+                stmt.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    return rs.getInt(1)
+                }
             }
         }
     }
@@ -628,6 +664,264 @@ class JobRecordCoordinatorIntegrationTest {
                     }
                 }
             }
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `coordinator keeps dispatching when a scheduled spec throws while scheduling`() {
+        val config = createConfig()
+        val latch = CountDownLatch(1)
+
+        val brokenScheduledSpec = object : FixedIntervalJobSpec {
+            override val estimateRuntime = false
+            override val jobTypeIdentifier = "broken-schedule"
+            override val intervalSeconds: Long
+                get() = throw IllegalStateException("interval misconfigured")
+            override fun createJob(): Job = throw IllegalStateException("never constructed")
+        }
+        val spec = createSpec(typeId = "healthy-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(brokenScheduledSpec)
+        registry.register(spec)
+
+        val jobId = insertJob(spec)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Healthy job was not executed while a scheduled spec kept throwing")
+            awaitJobState(jobId, JobState.COMPLETED.id)
+            assertTrue(coordinator.isRunning, "Coordinator thread should survive a throwing scheduled spec")
+            assertEquals(0, countJobs("broken-schedule"))
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `coordinator fails a job whose factory throws and keeps dispatching`() {
+        val config = createConfig(dispatchCount = 1)
+        val latch = CountDownLatch(1)
+
+        val brokenSpec = createSpec(typeId = "broken-factory") {
+            throw IllegalStateException("factory exploded")
+        }
+        val spec = createSpec(typeId = "healthy-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(brokenSpec)
+        registry.register(spec)
+
+        val brokenIds = listOf(insertJob(brokenSpec), insertJob(brokenSpec))
+        val healthyId = insertJob(spec)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Healthy job was not executed after factory failures")
+            awaitJobState(healthyId, JobState.COMPLETED.id)
+            for (brokenId in brokenIds) {
+                val record = awaitJobState(brokenId, JobState.FAILED.id)
+                val details = record["failure_details"] as String
+                assertTrue(details.contains("factory exploded"), "Unexpected failure details: $details")
+            }
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `coordinator fails a job that throws an Error instead of leaving it running`() {
+        val config = createConfig(dispatchCount = 1)
+        val latch = CountDownLatch(1)
+
+        val errorSpec = createSpec(typeId = "error-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    throw AssertionError("assertion in job")
+                }
+            }
+        }
+        val spec = createSpec(typeId = "healthy-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(errorSpec)
+        registry.register(spec)
+
+        val errorId = insertJob(errorSpec)
+        val healthyId = insertJob(spec)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Healthy job was not executed after an Error in another job")
+            awaitJobState(healthyId, JobState.COMPLETED.id)
+            val record = awaitJobState(errorId, JobState.FAILED.id)
+            assertEquals("assertion in job", record["failure_details"])
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `coordinator returns an interrupted job to pending on stop`() {
+        val config = createConfig(dispatchCount = 1)
+        val jobStarted = CountDownLatch(1)
+
+        val spec = createSpec(typeId = "interruptible-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    jobStarted.countDown()
+                    Thread.sleep(60_000)
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(spec)
+
+        val jobId = insertJob(spec)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        assertTrue(jobStarted.await(15, TimeUnit.SECONDS), "Job did not start within timeout")
+        coordinator.stop(waitForStop = true)
+
+        val record = readJobRecord(jobId)
+        assertEquals(JobState.PENDING.id, record["state"])
+        assertEquals(null, record["system_identifier"])
+        assertEquals(null, record["started_at"])
+        assertEquals(1, record["attempt"])
+    }
+
+    @Test
+    fun `coordinator reclaims jobs orphaned by a previous run of the same system on start`() {
+        val config = createConfig(dispatchCount = 1)
+        val latch = CountDownLatch(1)
+
+        val spec = createSpec(typeId = "orphaned-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(spec)
+
+        val startedAt = System.currentTimeMillis() - 60_000L
+        val orphanId = insertRunningJob("orphaned-job", "test-system", startedAt)
+        val foreignId = insertRunningJob("orphaned-job", "other-system", startedAt)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Orphaned job was not re-run within timeout")
+            val record = awaitJobState(orphanId, JobState.COMPLETED.id)
+            assertEquals("test-system", record["system_identifier"])
+            assertEquals(JobState.RUNNING.id, readJobRecord(foreignId)["state"], "Another system's running job must not be reclaimed")
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `wakeUp dispatches a new job without waiting for the poll interval`() {
+        val config = createConfig(pollSeconds = 60, dispatchCount = 1)
+        val latch = CountDownLatch(1)
+
+        val spec = createSpec(typeId = "woken-job") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(spec)
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            // Let the initial poll pass so the coordinator is inside its 60 second wait.
+            Thread.sleep(1_500)
+            val jobId = insertJob(spec)
+            coordinator.wakeUp()
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "wakeUp did not trigger a poll")
+            awaitJobState(jobId, JobState.COMPLETED.id)
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `failure to schedule a retry does not leave the job running`() {
+        val config = createConfig(dispatchCount = 1, maxEstimatedRuntimeRecords = 5)
+        val latch = CountDownLatch(1)
+
+        val spec = object : JobSpec {
+            override val estimateRuntime = false
+            override val jobTypeIdentifier = "broken-retry"
+            override val maxRetriesOnFailure: Int = 2
+            override val minSecondsBetweenRetries: Int? = 0
+            override fun getEstimatedRuntimeQueries(jobDetails: JsonObject): List<QueryNode> = throw IllegalStateException("bad runtime query")
+            override fun createJob(): Job = object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    latch.countDown()
+                    return JobFailed("boom", retryIfAllowed = true)
+                }
+            }
+        }
+
+        val registry = JobRegistry()
+        registry.register(spec)
+
+        val jobId = insertJob(spec, details = mapOf("k" to "v").toJsonObject())
+
+        val coordinator = JobCoordinator("test-system", registry, config)
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Job was not executed within timeout")
+            val record = awaitJobState(jobId, JobState.FAILED.id)
+            assertEquals("boom", record["failure_details"])
+            Thread.sleep(1_500)
+            assertEquals(1, countJobs("broken-retry"), "No retry record can be created when retry preparation fails")
         } finally {
             coordinator.stop(waitForStop = true)
         }

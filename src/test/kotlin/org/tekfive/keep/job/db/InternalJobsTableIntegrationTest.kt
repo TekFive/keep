@@ -192,6 +192,76 @@ class JobRecordsTableOperationsIntegrationTest {
         assertEquals(2, candidates.size)
     }
 
+    @Test
+    fun `getJobIdStartCandidates skips a locked job and returns a later job of another type`() {
+        val now = System.currentTimeMillis()
+        markRunning(insertWaitingJob(type = "locked-type", lockKey = "lock-a", createdAt = now - 3000))
+        insertWaitingJob(type = "locked-type", lockKey = "lock-a", createdAt = now - 2000)
+        val other = insertWaitingJob(type = "other-type", createdAt = now - 1000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("locked-type", "other-type"), now) }
+
+        assertEquals(listOf(other), candidates.map { it.first })
+    }
+
+    @Test
+    fun `getJobIdStartCandidates returns a job whose lock key is free`() {
+        val now = System.currentTimeMillis()
+        markRunning(insertWaitingJob(type = "locked-type", lockKey = "lock-a", createdAt = now - 3000))
+        val free = insertWaitingJob(type = "locked-type", lockKey = "lock-b", createdAt = now - 2000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("locked-type"), now) }
+
+        assertEquals(listOf(free), candidates.map { it.first })
+    }
+
+    @Test
+    fun `getJobIdStartCandidates skips a saturated concurrency scope`() {
+        val now = System.currentTimeMillis()
+        markRunning(insertWaitingJob(maxConcurrentJobs = 2, concurrencyKey = "account-a", createdAt = now - 5000))
+        markRunning(insertWaitingJob(maxConcurrentJobs = 2, concurrencyKey = "account-a", createdAt = now - 4000))
+        insertWaitingJob(maxConcurrentJobs = 2, concurrencyKey = "account-a", createdAt = now - 3000)
+        val unsaturated = insertWaitingJob(maxConcurrentJobs = 2, concurrencyKey = "account-b", createdAt = now - 2000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("test-job"), now) }
+
+        assertEquals(listOf(unsaturated), candidates.map { it.first })
+    }
+
+    @Test
+    fun `getJobIdStartCandidates counts every running job of the type when the candidate has no concurrency key`() {
+        val now = System.currentTimeMillis()
+        markRunning(insertWaitingJob(maxConcurrentJobs = 2, concurrencyKey = "account-a", createdAt = now - 5000))
+        markRunning(insertWaitingJob(maxConcurrentJobs = 2, createdAt = now - 4000))
+        insertWaitingJob(maxConcurrentJobs = 2, createdAt = now - 3000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("test-job"), now) }
+
+        assertTrue(candidates.isEmpty())
+    }
+
+    @Test
+    fun `getJobIdStartCandidates ignores a null max concurrent jobs`() {
+        val now = System.currentTimeMillis()
+        markRunning(insertWaitingJob(createdAt = now - 3000))
+        val pending = insertWaitingJob(createdAt = now - 2000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("test-job"), now) }
+
+        assertEquals(listOf(pending), candidates.map { it.first })
+    }
+
+    @Test
+    fun `getJobIdStartCandidates omits excluded ids`() {
+        val now = System.currentTimeMillis()
+        val queued = insertWaitingJob(createdAt = now - 3000)
+        val next = insertWaitingJob(createdAt = now - 2000)
+
+        val candidates = db { table.getJobIdStartCandidates(10, listOf("test-job"), now, excludeIds = listOf(queued)) }
+
+        assertEquals(listOf(next), candidates.map { it.first })
+    }
+
     // --- tryCaptureRunLock ---
 
     @Test
@@ -510,5 +580,37 @@ class JobRecordsTableOperationsIntegrationTest {
     @Test
     fun `updateLastCheckIn returns null for nonexistent ID`() {
         assertNull(db {  table.updateLastCheckIn(99999L, System.currentTimeMillis()) })
+    }
+
+    @Test
+    fun `updateLastCheckIn is committed before the enclosing transaction ends`() {
+        val id = insertWaitingJob()
+        db { table.tryCaptureRunLock(id, "test-system", defaultSpec) }
+        val checkInAt = System.currentTimeMillis()
+
+        db {
+            // Written in the enclosing transaction, so it must stay invisible to other connections.
+            val uncommittedId = table.insertJob(defaultSpec)
+
+            assertEquals(JobState.RUNNING, table.updateLastCheckIn(id, checkInAt))
+
+            PostgresTestSupport.getConnection(postgres).use { conn ->
+                conn.prepareStatement("SELECT last_checkin_at FROM job_records WHERE id = ?").use { stmt ->
+                    stmt.setLong(1, id)
+                    stmt.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals(checkInAt, rs.getLong("last_checkin_at"))
+                    }
+                }
+
+                conn.prepareStatement("SELECT count(*) FROM job_records WHERE id = ?").use { stmt ->
+                    stmt.setLong(1, uncommittedId)
+                    stmt.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals(0, rs.getInt(1), "The enclosing transaction had already committed")
+                    }
+                }
+            }
+        }
     }
 }

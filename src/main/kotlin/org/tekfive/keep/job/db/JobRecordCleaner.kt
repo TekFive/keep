@@ -34,6 +34,9 @@ import kotlin.time.Duration.Companion.days
  *
  * [JobRecordLogsTable] references [JobRecordsTable] without an ON DELETE cascade, so the log rows
  * for the purged records are deleted first, then the records themselves.
+ *
+ * Purging runs in transactions of [PURGE_BATCH_SIZE] records so that a large backlog neither
+ * exceeds the JDBC driver's bind-parameter limit nor holds locks for the whole run.
  */
 class JobRecordCleaner : Job {
 
@@ -60,6 +63,13 @@ class JobRecordCleaner : Job {
             description = "Age in days after which failed job records (failed, cancelled, timed out, etc.) and their logs are deleted. Defaults to the completed keep time.") { completedKeepDaysAck().let { it + (it * 0.5).roundToInt() } }
 
         private val failedStates = JobState.terminatedStates.filter { it != JobState.COMPLETED }
+
+        /**
+         * Ids deleted per transaction. Deleting every purgeable id at once would exceed the JDBC
+         * driver's 65,535 bind-parameter limit on a backlog of any size, and would hold locks on
+         * the whole purge set for the length of the job.
+         */
+        const val PURGE_BATCH_SIZE = 1000
     }
 
     override fun execute(context: JobContext): JobResult {
@@ -67,20 +77,36 @@ class JobRecordCleaner : Job {
         val completedCutoffAt = now - completedKeepDaysAck().days.inWholeMilliseconds
         val failedCutoffAt = now - failedKeepDaysAck().days.inWholeMilliseconds
 
-        db {
-            val purgeIds = JobRecordsTable.select(JobRecordsTable.id).where {
-                JobRecordsTable.endedAt.isNotNull() and (
-                    ((JobRecordsTable.state eq JobState.COMPLETED) and (JobRecordsTable.endedAt lessEq completedCutoffAt)) or
-                        ((JobRecordsTable.state inList failedStates) and (JobRecordsTable.endedAt lessEq failedCutoffAt))
-                )
-            }.map { it[JobRecordsTable.id] }
+        var recordsDeleted = 0
+        var logsDeleted = 0
 
-            if (purgeIds.isNotEmpty()) {
-                // Logs reference job records without a cascade, so remove them before their records.
-                val logsDeleted = JobRecordLogsTable.deleteWhere { JobRecordLogsTable.jobRecordId inList purgeIds }
-                val recordsDeleted = JobRecordsTable.deleteWhere { JobRecordsTable.id inList purgeIds }
-                context.log.info("Deleted $recordsDeleted terminated job records and $logsDeleted job record logs.")
+        while (true) {
+            val batch = db {
+                val purgeIds = JobRecordsTable.select(JobRecordsTable.id).where {
+                    JobRecordsTable.endedAt.isNotNull() and (
+                        ((JobRecordsTable.state eq JobState.COMPLETED) and (JobRecordsTable.endedAt lessEq completedCutoffAt)) or
+                            ((JobRecordsTable.state inList failedStates) and (JobRecordsTable.endedAt lessEq failedCutoffAt))
+                    )
+                }.limit(PURGE_BATCH_SIZE).map { it[JobRecordsTable.id] }
+
+                if (purgeIds.isNotEmpty()) {
+                    // Logs reference job records without a cascade, so remove them before their records.
+                    logsDeleted += JobRecordLogsTable.deleteWhere { JobRecordLogsTable.jobRecordId inList purgeIds }
+                    recordsDeleted += JobRecordsTable.deleteWhere { JobRecordsTable.id inList purgeIds }
+                }
+
+                purgeIds.size
             }
+
+            if (batch < PURGE_BATCH_SIZE) {
+                break
+            }
+
+            context.checkIn()
+        }
+
+        if (recordsDeleted > 0) {
+            context.log.info("Deleted $recordsDeleted terminated job records and $logsDeleted job record logs.")
         }
 
         return JobCompleted()

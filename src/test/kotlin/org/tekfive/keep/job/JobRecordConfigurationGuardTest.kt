@@ -150,4 +150,24 @@ class JobRecordConfigurationGuardTest {
         val guard = JobConfigurationGuard(config)
         assertEquals(42, guard.getDatabaseBackoffSeconds(SQLException("test")))
     }
+
+    // --- reclaimOrphanedJobsOnStart delegation ---
+
+    @Test
+    fun `reclaimOrphanedJobsOnStart defaults to true and delegates to underlying configuration`() {
+        assertTrue(JobConfigurationGuard(createConfig()).reclaimOrphanedJobsOnStart)
+
+        val config = object : JobConfiguration {
+            override val dispatchCount: Int = 1
+            override val pollSeconds: Int = 1
+            override val maximumCandidatesBuffer: Int = 1
+            override val maxEstimatedRuntimeRecords: Int = 10
+            override val minSecondsBetweenJobCheckin: Int = 30
+            override val defaultMinSecondsBetweenJobRetry: Int = 300
+            override val minSaveLogLevel: JobRecordLogLevel? = null
+            override val reclaimOrphanedJobsOnStart: Boolean = false
+            override fun getDatabaseBackoffSeconds(e: SQLException): Int = 5
+        }
+        assertFalse(JobConfigurationGuard(config).reclaimOrphanedJobsOnStart)
+    }
 }

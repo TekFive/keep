@@ -2,6 +2,9 @@ package org.tekfive.keep.job.db
 
 import org.tekfive.keep.job.JobConfiguration
 import java.sql.SQLException
+import java.sql.SQLNonTransientConnectionException
+import java.sql.SQLRecoverableException
+import java.sql.SQLTransientException
 import java.util.concurrent.atomic.AtomicLong
 
 internal class DatabaseGatekeeper(
@@ -50,8 +53,22 @@ internal class DatabaseGatekeeper(
     }
 
     fun isRecoverable(sqlException: SQLException): Boolean {
+        // Driver and pool failures that carry no SQLSTATE (for example a HikariCP pool timeout)
+        // still identify themselves through the JDBC exception hierarchy.
+        if (sqlException is SQLTransientException ||
+            sqlException is SQLRecoverableException ||
+            sqlException is SQLNonTransientConnectionException
+        ) {
+            return true
+        }
+
         val sqlState = sqlException.sqlState
-        return sqlState != null && (sqlState.startsWith("08") || // Class 08 — Connection Exceptions
+        if (sqlState.isNullOrBlank()) {
+            val cause = sqlException.cause
+            return cause is SQLException && cause !== sqlException && isRecoverable(cause)
+        }
+
+        return (sqlState.startsWith("08") || // Class 08 — Connection Exceptions
             sqlState.startsWith("25") || // Class 25 — Invalid Transaction State
             sqlState.startsWith("40") || // Class 40 — Transaction Rollback
             sqlState.startsWith("53") || // Class 53 — Insufficient Resources

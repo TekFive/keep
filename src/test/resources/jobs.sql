@@ -34,11 +34,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq
     ON job_records (type)
     WHERE scheduled_job = TRUE AND state IN (1, 2);
 
+CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx
+    ON job_records (priority DESC, created_at)
+    WHERE state = 1;
+
+CREATE INDEX IF NOT EXISTS job_records_type_state_idx
+    ON job_records (type, state);
+
 CREATE TABLE IF NOT EXISTS job_record_logs (
     id BIGINT DEFAULT nextval('globalid') PRIMARY KEY,
-    job_record_id BIGINT NOT NULL REFERENCES job_records(id),
-    created_at BIGINT NOT NULL,
+    job_record_id BIGINT NOT NULL CONSTRAINT job_record_logs_job_record_id_fk REFERENCES job_records(id) ON DELETE NO ACTION,
     level INT NOT NULL,
     message TEXT NOT NULL,
     added_at BIGINT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS job_record_logs_job_record_id_ix
+    ON job_record_logs (job_record_id);

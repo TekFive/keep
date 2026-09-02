@@ -23,6 +23,16 @@ interface JobConfiguration {
 
     val minSaveLogLevel: JobRecordLogLevel?
 
+    /**
+     * When true, [JobCoordinator.start] returns any [JobState.RUNNING] record that carries this
+     * coordinator's system identifier and started before the coordinator did back to
+     * [JobState.PENDING]. Such records were orphaned by a crash or an unclean shutdown. This
+     * requires the system identifier to be unique to one running process; disable it when several
+     * processes share an identifier.
+     */
+    val reclaimOrphanedJobsOnStart: Boolean
+        get() = true
+
     fun getDatabaseBackoffSeconds(e: SQLException): Int
 }
 

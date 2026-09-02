@@ -503,6 +503,34 @@ JobRecordsTable.insertJob(
 
 Job records support priority ordering, minimum start times, retry policies, lock keys, concurrency limits, scheduled jobs, timeout detection, and average-runtime estimation using JSON path filters over previous job details.
 
+Calling `coordinator.wakeUp()` after inserting a job ends the current poll wait early, so the new
+job is dispatched without waiting for `pollSeconds` to elapse.
+
+#### Resilience
+
+The coordination thread guards every polling cycle: a scheduled spec that throws while computing
+its next run, a job factory that fails, or an `Error` thrown by a job is logged and the cycle is
+retried on the next poll. Dispatcher threads that exit are replaced automatically. A captured job is
+always moved out of `RUNNING` before its dispatcher moves on: failures in job construction or
+execution become `FAILED` records, and a job interrupted by `stop()` or a dispatcher scale-down is
+returned to `PENDING` so it runs again.
+
+`systemIdentifier` must be unique to one running process. On `start()` the coordinator returns
+any `RUNNING` record that carries its own identifier and started before the coordinator did back to
+`PENDING`, on the assumption that the previous process died without finishing it. Set
+`reclaimOrphanedJobsOnStart` to `false` on the `JobConfiguration` if several processes share an
+identifier.
+
+Records left `RUNNING` by another process are recovered by timeout detection. A job type whose
+`timeoutSeconds` is zero or negative opts out of that recovery, and the coordinator logs a warning
+for each such type at start. Timeout detection depends on jobs calling `context.checkIn()`;
+check-ins are written on a dedicated connection so they are visible even from inside a
+`DatabaseTransactionJob` transaction.
+
+`JobResult` and the exceptions the framework uses to end a job extend `Exception`. A job body that
+catches `Exception` broadly will swallow `throw JobCompleted()` style signals and the cancellation
+raised by `checkIn()`, so catch specific exception types or rethrow `JobResult` instances.
+
 ### Paging and Schema Helpers
 
 Paging utilities provide a consistent shape for API list endpoints. `PageRequest` parses request parameters such as `page`, `size`, `q`, and `sort`, while `PagedQuery` handles filtering, search predicates, sorting, limits, offsets, and JSON response formatting.

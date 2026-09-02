@@ -20,6 +20,7 @@ import org.tekfive.keep.data.dataEnum
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.db.dbConnection
+import org.tekfive.keep.db.inDbTransaction
 import org.tekfive.keep.data.addedAt
 import org.tekfive.keep.data.createdAt
 import org.tekfive.keep.data.uniqueConstraint
@@ -58,6 +59,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         "CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq ON $tableName (type, lock_key) WHERE state = ${JobState.RUNNING.id} AND lock_key IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS job_records_running_concurrency_scope_idx ON $tableName (type, concurrency_key) WHERE state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq ON $tableName (type) WHERE scheduled_job = TRUE AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})",
+        "CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx ON $tableName (priority DESC, created_at) WHERE state = ${JobState.PENDING.id}",
+        "CREATE INDEX IF NOT EXISTS job_records_type_state_idx ON $tableName (type, state)",
     )
 
     fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord {
@@ -85,18 +88,88 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
-    fun getJobIdStartCandidates(maxIds: Int, jobTypeIds: List<String>, now: Long): List<Pair<Long, String>> {
+    /**
+     * Returns the ids and types of the records that are the best candidates to start now, ordered
+     * by priority (descending) then creation time (ascending).
+     *
+     * Only records that could actually be captured are returned, so that a blocked record at the
+     * head of the queue cannot starve the records behind it. A record is skipped when:
+     * - it carries a [lockKey] and another record of the same [type] and [lockKey] is already
+     *   [JobState.RUNNING], or
+     * - its own [maxConcurrentJobs] is reached by the [JobState.RUNNING] records in its concurrency
+     *   scope (records of the same [type] with the same [concurrencyKey], or every record of the
+     *   type when the candidate has no [concurrencyKey]).
+     *
+     * A null [maxConcurrentJobs] is not filtered on: the spec-level default is unknown here, so the
+     * limit is left to [tryCaptureRunLock].
+     *
+     * [excludeIds] removes already-known ids (for example, ids the caller has queued) from the
+     * result.
+     */
+    fun getJobIdStartCandidates(
+        maxIds: Int,
+        jobTypeIds: List<String>,
+        now: Long,
+        excludeIds: Collection<Long> = emptyList(),
+    ): List<Pair<Long, String>> {
         if (jobTypeIds.isEmpty()) {
             return emptyList()
         }
 
+        val waitingStateIds = JobState.waitingStates.joinToString(",") { it.id.toString() }
+        val typePlaceholders = jobTypeIds.joinToString(",") { "?" }
+        val excludeClause = if (excludeIds.isEmpty()) "" else "AND candidate.id <> ALL (?)"
+        val sql = """
+            SELECT candidate.id, candidate.type
+            FROM $tableName candidate
+            WHERE candidate.state IN ($waitingStateIds)
+            AND candidate.type IN ($typePlaceholders)
+            AND (candidate.minimum_start_at IS NULL OR candidate.minimum_start_at <= ?)
+            $excludeClause
+            AND (
+                candidate.lock_key IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM $tableName lock_holder
+                    WHERE lock_holder.state = ${JobState.RUNNING.id}
+                    AND lock_holder.type = candidate.type
+                    AND lock_holder.lock_key = candidate.lock_key
+                )
+            )
+            AND (
+                candidate.max_concurrent_jobs IS NULL
+                OR candidate.max_concurrent_jobs > (
+                    SELECT COUNT(*)
+                    FROM $tableName scope_member
+                    WHERE scope_member.state = ${JobState.RUNNING.id}
+                    AND scope_member.type = candidate.type
+                    AND (candidate.concurrency_key IS NULL OR scope_member.concurrency_key = candidate.concurrency_key)
+                )
+            )
+            ORDER BY candidate.priority DESC, candidate.created_at ASC
+            LIMIT ?
+        """.trimIndent()
+
         return db {
-            select(id, type).where {
-                (state inList JobState.waitingStates) and
-                    (type inList jobTypeIds) and
-                    (minimumStartAt.isNull() or (minimumStartAt lessEq now))
-            }.orderBy(priority to SortOrder.DESC, createdAt to SortOrder.ASC).limit(maxIds)
-                .map { it[id] to it[type] }
+            val connection = dbConnection()
+            connection.prepareStatement(sql).use { statement ->
+                val currentIndex = AtomicInteger(1)
+                jobTypeIds.forEach { statement.setString(currentIndex.getAndIncrement(), it) }
+                statement.setLong(currentIndex.getAndIncrement(), now)
+                if (excludeIds.isNotEmpty()) {
+                    val excluded = connection.createArrayOf("bigint", excludeIds.toTypedArray())
+                    statement.setArray(currentIndex.getAndIncrement(), excluded)
+                }
+                statement.setInt(currentIndex.getAndIncrement(), maxIds)
+
+                statement.executeQuery().use { rs ->
+                    val candidates = mutableListOf<Pair<Long, String>>()
+                    while (rs.next()) {
+                        candidates.add(rs.getLong(1) to rs.getString(2))
+                    }
+                    candidates
+                }
+            }
         }
     }
 
@@ -303,6 +376,84 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
+    /**
+     * Returns a [JobState.RUNNING] record to [JobState.PENDING] so another dispatcher can pick it
+     * up. Used when a dispatcher was interrupted before the job could complete.
+     */
+    internal fun tryRequeue(jobRecordId: Long): Boolean {
+        return db {
+            update({
+                (id eq jobRecordId) and (this@JobRecordsTable.state eq JobState.RUNNING)
+            }) { statement ->
+                statement[this@JobRecordsTable.state] = JobState.PENDING
+                statement[this@JobRecordsTable.systemIdentifier] = null
+                statement[startedAt] = null
+                statement[lastCheckInAt] = null
+            } > 0
+        }
+    }
+
+    /**
+     * Returns every [JobState.RUNNING] record owned by [systemIdentifier] that started before
+     * [startedBefore] to [JobState.PENDING]. A record matching both conditions cannot have a live
+     * dispatcher behind it as long as [systemIdentifier] is unique to one running process.
+     */
+    internal fun requeueOrphanedRunningJobs(systemIdentifier: String, startedBefore: Long): List<JobRecord> {
+        return db {
+            updateReturning(
+                where = {
+                    (state eq JobState.RUNNING) and
+                        (this@JobRecordsTable.systemIdentifier eq systemIdentifier) and
+                        (startedAt.isNotNull()) and (startedAt lessEq startedBefore)
+                }
+            ) { statement ->
+                statement[this@JobRecordsTable.state] = JobState.PENDING
+                statement[this@JobRecordsTable.systemIdentifier] = null
+                statement[startedAt] = null
+                statement[lastCheckInAt] = null
+            }.map(::map)
+        }
+    }
+
+    /**
+     * Summarises the scheduling state of each job type in [jobTypeIdentifiers] with one query:
+     * whether any non-terminated record exists, and when the most recent scheduled record ended.
+     * Types with no records at all are absent from the result.
+     */
+    fun getScheduleStates(jobTypeIdentifiers: Collection<String>): Map<String, ScheduleState> {
+        if (jobTypeIdentifiers.isEmpty()) {
+            return emptyMap()
+        }
+
+        val nonTerminatedIds = JobState.entries.filter { !it.terminated }.joinToString(",") { it.id.toString() }
+        val terminatedIds = JobState.terminatedStates.joinToString(",") { it.id.toString() }
+        val placeholders = jobTypeIdentifiers.joinToString(",") { "?" }
+        val sql = """
+            SELECT type,
+                   BOOL_OR(state IN ($nonTerminatedIds)) AS has_non_terminated,
+                   MAX(ended_at) FILTER (WHERE scheduled_job AND state IN ($terminatedIds) AND ended_at IS NOT NULL) AS last_ended_at
+            FROM $tableName
+            WHERE type IN ($placeholders)
+            GROUP BY type
+        """.trimIndent()
+
+        return db {
+            dbConnection().prepareStatement(sql).use { statement ->
+                jobTypeIdentifiers.forEachIndexed { index, typeId -> statement.setString(index + 1, typeId) }
+                statement.executeQuery().use { rs ->
+                    val states = mutableMapOf<String, ScheduleState>()
+                    while (rs.next()) {
+                        val lastEndedAt = rs.getLong("last_ended_at").let { if (rs.wasNull()) null else it }
+                        states[rs.getString("type")] = ScheduleState(rs.getBoolean("has_non_terminated"), lastEndedAt)
+                    }
+                    states
+                }
+            }
+        }
+    }
+
+    data class ScheduleState(val hasNonTerminatedJob: Boolean, val lastEndedScheduledAt: Long?)
+
     internal fun updateJobDetails(jobId: Long, details: JsonObject) {
         db {
             update({ id eq jobId }) { statement ->
@@ -311,7 +462,19 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
+    /**
+     * Records a check-in for [jobId] and returns the record's current state, or null when no record
+     * has that id.
+     *
+     * A job may run its whole body inside one transaction, which would hide its check-ins from the
+     * timeout monitor until that transaction commits. When called from inside a transaction the
+     * update is therefore committed immediately on a separate connection.
+     */
     internal fun updateLastCheckIn(jobId: Long, checkInAt: Long): JobState? {
+        if (inDbTransaction()) {
+            return updateLastCheckInOnNewConnection(jobId, checkInAt)
+        }
+
         return db {
             val result = updateReturning(
                 returning = listOf(state),
@@ -323,6 +486,22 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             }
 
             result.firstOrNull()?.let { it[state] }
+        }
+    }
+
+    /** Commits a check-in outside of the caller's transaction so it is visible immediately. */
+    private fun updateLastCheckInOnNewConnection(jobId: Long, checkInAt: Long): JobState? {
+        val sql = "UPDATE $tableName SET last_checkin_at = ? WHERE id = ? RETURNING state"
+
+        DbConnection.createConnection().use { connection ->
+            connection.autoCommit = true
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(1, checkInAt)
+                statement.setLong(2, jobId)
+                statement.executeQuery().use { rs ->
+                    return if (rs.next()) JobState.map(rs.getInt(1)) else null
+                }
+            }
         }
     }
 
