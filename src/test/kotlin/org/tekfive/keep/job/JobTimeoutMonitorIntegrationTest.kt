@@ -12,6 +12,7 @@ import org.tekfive.keep.job.db.DatabaseGatekeeper
 import org.tekfive.keep.job.db.JobRecord
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.job.db.PostgresTestSupport
+import org.tekfive.keep.job.dispatch.DispatchContext
 import org.tekfive.jfk.json
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
@@ -105,6 +106,122 @@ class JobTimeoutMonitorIntegrationTest {
     }
 
     @Test
+    fun `jobs of one type use independent heartbeat limits`() {
+        val spec = TimeoutSpec("per-job", timeoutSeconds = 60)
+        val expired = runningJob(spec, 0L, null, timeoutSeconds = 10)
+        val active = runningJob(spec, 0L, null, timeoutSeconds = 30)
+        val disabled = runningJob(spec, 0L, null, timeoutSeconds = 0)
+
+        monitor(5, spec).sweep(20_000L)
+
+        assertEquals(JobState.TIMED_OUT, load(expired).state)
+        assertEquals(JobState.RUNNING, load(active).state)
+        assertEquals(JobState.RUNNING, load(disabled).state)
+        assertEquals(JobTimeoutReason.HEARTBEAT, spec.reason)
+    }
+
+    @Test
+    fun `runtime limit expires at the boundary despite a fresh heartbeat`() {
+        val spec = TimeoutSpec("runtime")
+        val expired = runningJob(spec, 0L, 10_000L, timeoutSeconds = 0, maxRuntimeSeconds = 10)
+        val active = runningJob(spec, 1L, 10_000L, maxRuntimeSeconds = 10)
+
+        monitor(5, spec).sweep(10_000L)
+
+        assertEquals(JobState.TIMED_OUT, load(expired).state)
+        assertEquals(JobState.RUNNING, load(active).state)
+        assertEquals(JobTimeoutReason.MAX_RUNTIME, spec.reason)
+        assertEquals("Job exceeded its maximum runtime of 10 seconds.", load(expired).failureDetails)
+    }
+
+    @Test
+    fun `runtime limits fall back to spec then configuration and allow zero override`() {
+        val spec = TimeoutSpec("spec-runtime", timeoutSeconds = 0, maxRuntimeSeconds = 10)
+        val defaultSpec = TimeoutSpec("default-runtime", timeoutSeconds = 0)
+        val specJob = runningJob(spec, 0L, 20_000L)
+        val defaultJob = runningJob(defaultSpec, 0L, 20_000L)
+        val disabled = runningJob(spec, 0L, 20_000L, maxRuntimeSeconds = 0)
+
+        val monitor = monitor(5, spec, defaultSpec, maxRuntimeSeconds = 30)
+        monitor.sweep(20_000L)
+        assertEquals(JobState.TIMED_OUT, load(specJob).state)
+        assertEquals(JobState.RUNNING, load(defaultJob).state)
+        monitor.sweep(30_000L)
+        assertEquals(JobState.TIMED_OUT, load(defaultJob).state)
+        assertEquals(JobState.RUNNING, load(disabled).state)
+    }
+
+    @Test
+    fun `queued jobs do not consume runtime and completed jobs cannot time out`() {
+        val spec = TimeoutSpec("queued-runtime", timeoutSeconds = 0, maxRuntimeSeconds = 1)
+        val queued = JobRecordsTable.insertJob(spec)
+        val completed = runningJob(spec, 0L, null)
+        db { JobRecordsTable.tryMarkEnded(completed, 500L, JobState.COMPLETED) }
+
+        monitor(5, spec).sweep(Long.MAX_VALUE)
+
+        assertEquals(JobState.PENDING, load(queued).state)
+        assertEquals(JobState.COMPLETED, load(completed).state)
+        assertNull(spec.reason)
+    }
+
+    @Test
+    fun `runtime callback failure rolls back and retries with the same reason`() {
+        var attempts = 0
+        val spec = object : JobSpec {
+            override val jobTypeIdentifier = "retry-runtime"
+            override fun createJob(): Job = error("Not dispatched")
+            override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int, reason: JobTimeoutReason) {
+                assertEquals(JobTimeoutReason.MAX_RUNTIME, reason)
+                attempts++
+                if (attempts == 1) {
+                    error("Cleanup unavailable")
+                }
+            }
+        }
+        val job = runningJob(spec, 0L, 20_000L, maxRuntimeSeconds = 10)
+        monitor(5, spec).sweep(20_000L)
+        assertEquals(JobState.RUNNING, load(job).state)
+        monitor(5, spec).sweep(20_000L)
+        assertEquals(JobState.TIMED_OUT, load(job).state)
+        assertEquals(2, attempts)
+    }
+
+    @Test
+    fun `atomic timeout guard rechecks heartbeat and runtime independently`() {
+        val spec = TimeoutSpec("timeout-guard")
+        val job = runningJob(spec, 0L, 20_000L)
+        assertNull(db { JobRecordsTable.tryMarkTimedOut(job, 10_000L, 20_000L) })
+        assertNotNull(db {
+            JobRecordsTable.tryMarkTimedOut(job, 10_000L, 20_000L, reason = JobTimeoutReason.MAX_RUNTIME)
+        })
+        assertNull(db {
+            JobRecordsTable.tryMarkTimedOut(job, 10_000L, 20_000L, reason = JobTimeoutReason.MAX_RUNTIME)
+        })
+    }
+
+    @Test
+    fun `job limits survive copying retry inheritance and explicit disable`() {
+        val spec = TimeoutSpec("copy-limits", timeoutSeconds = 30, maxRuntimeSeconds = 60)
+        val parentId = JobRecordsTable.insertJob(spec, timeoutSeconds = 10, maxRuntimeSeconds = 20)
+        val parent = load(parentId)
+        val copy = JobRecordsTable.launchCopy(parent)
+        assertEquals(10, copy.timeoutSeconds)
+        assertEquals(20, copy.maxRuntimeSeconds)
+
+        val job = object : Job {
+            override fun execute(context: JobContext): JobResult = JobCompleted()
+        }
+        val context = DispatchContext(1, job, spec, parent, JobRecordsTable, null)
+        val retry = load(JobRecordsTable.insertJob(spec, parentJobContext = context))
+        assertEquals(10, retry.timeoutSeconds)
+        assertEquals(20, retry.maxRuntimeSeconds)
+        val disabled = load(JobRecordsTable.insertJob(spec, parentJobContext = context, timeoutSeconds = 0, maxRuntimeSeconds = 0))
+        assertEquals(0, disabled.timeoutSeconds)
+        assertEquals(0, disabled.maxRuntimeSeconds)
+    }
+
+    @Test
     fun `failed callback rolls back timeout and retries after monitor restart`() {
         val now = 20_000L
         var attempts = 0
@@ -160,11 +277,12 @@ class JobTimeoutMonitorIntegrationTest {
         assertEquals(healthyId, healthySpec.timedOutJob?.id)
     }
 
-    private fun monitor(defaultTimeoutSeconds: Int, vararg specs: JobSpec): JobTimeoutMonitor {
+    private fun monitor(defaultTimeoutSeconds: Int, vararg specs: JobSpec, maxRuntimeSeconds: Int = 0): JobTimeoutMonitor {
         val registry = JobRegistry()
         specs.forEach { registry += it }
         val configuration = object : BaseJobConfiguration() {
             override val defaultJobTimeoutSeconds: Int = defaultTimeoutSeconds
+            override val defaultJobMaxRuntimeSeconds: Int = maxRuntimeSeconds
         }
         return JobTimeoutMonitor(
             configuration = JobConfigurationGuard(configuration),
@@ -174,8 +292,8 @@ class JobTimeoutMonitorIntegrationTest {
         )
     }
 
-    private fun runningJob(spec: JobSpec, startedAt: Long, lastCheckInAt: Long?): Long {
-        val id = JobRecordsTable.insertJob(spec)
+    private fun runningJob(spec: JobSpec, startedAt: Long, lastCheckInAt: Long?, timeoutSeconds: Int? = null, maxRuntimeSeconds: Int? = null): Long {
+        val id = JobRecordsTable.insertJob(spec, timeoutSeconds = timeoutSeconds, maxRuntimeSeconds = maxRuntimeSeconds)
         db { JobRecordsTable.tryCaptureRunLock(id, "test-system", spec) }
 
         DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
@@ -201,12 +319,15 @@ class JobTimeoutMonitorIntegrationTest {
     private class TimeoutSpec(
         override val jobTypeIdentifier: String,
         override val timeoutSeconds: Int? = null,
+        override val maxRuntimeSeconds: Int? = null,
     ) : JobSpec {
         var timedOutJob: JobRecord? = null
             private set
         var timedOutAt: Long? = null
             private set
         var timedOutAfterSeconds: Int? = null
+            private set
+        var reason: JobTimeoutReason? = null
             private set
 
         override fun createJob(): Job {
@@ -217,6 +338,11 @@ class JobTimeoutMonitorIntegrationTest {
             this.timedOutJob = jobRecord
             this.timedOutAt = timedOutAt
             this.timedOutAfterSeconds = timeoutSeconds
+        }
+
+        override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int, reason: JobTimeoutReason) {
+            this.reason = reason
+            onJobTimedOut(jobRecord, timedOutAt, timeoutSeconds)
         }
     }
 }

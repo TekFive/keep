@@ -33,6 +33,10 @@ interface JobSpec {
     val timeoutSeconds: Int?
         get() = null
 
+    /** Maximum elapsed seconds per running attempt, regardless of check-ins. Non-positive disables it. */
+    val maxRuntimeSeconds: Int?
+        get() = null
+
     val retryExceptionBaseTypes: List<KClass<out Exception>>
         get() = emptyList()
 
@@ -67,5 +71,10 @@ interface JobSpec {
      * retries on a later sweep. External effects must be idempotent.
      */
     fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
+    }
+
+    /** Receives either timeout cause in the same transaction; delegates to the legacy callback by default. */
+    fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int, reason: JobTimeoutReason) {
+        onJobTimedOut(jobRecord, timedOutAt, timeoutSeconds)
     }
 }

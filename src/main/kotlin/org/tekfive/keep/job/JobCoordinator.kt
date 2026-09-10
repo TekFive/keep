@@ -274,12 +274,13 @@ class JobCoordinator(
 
         for (spec in registry.jobSpecs) {
             val timeoutSeconds = spec.timeoutSeconds ?: configuration.defaultJobTimeoutSeconds
-            if (timeoutSeconds <= 0) {
+            val maxRuntimeSeconds = spec.maxRuntimeSeconds ?: configuration.defaultJobMaxRuntimeSeconds
+            if (timeoutSeconds <= 0 && maxRuntimeSeconds <= 0) {
                 log.warn(
-                    "Job type {} has timeout detection disabled; a running record orphaned by a crash of another process will never be recovered automatically.",
+                    "Job type {} has timeout detection disabled by default; per-job limits are needed to recover orphaned running records.",
                     spec.jobTypeIdentifier,
                 )
-            } else if (timeoutSeconds < configuration.minSecondsBetweenJobCheckin) {
+            } else if (timeoutSeconds > 0 && timeoutSeconds < configuration.minSecondsBetweenJobCheckin) {
                 log.warn(
                     "Job type {} times out after {}s but check-ins are throttled to one per {}s; long runs of this type will always time out.",
                     spec.jobTypeIdentifier,
@@ -310,6 +311,9 @@ internal class JobConfigurationGuard(val configuration: JobConfiguration) : JobC
 
     override val defaultJobTimeoutSeconds: Int
         get() = configuration.defaultJobTimeoutSeconds.coerceAtLeast(0)
+
+    override val defaultJobMaxRuntimeSeconds: Int
+        get() = configuration.defaultJobMaxRuntimeSeconds.coerceAtLeast(0)
 
     override val defaultMinSecondsBetweenJobRetry: Int
         get() = configuration.defaultMinSecondsBetweenJobRetry.coerceAtLeast(0)

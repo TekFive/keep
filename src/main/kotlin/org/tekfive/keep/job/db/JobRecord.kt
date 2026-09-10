@@ -24,5 +24,9 @@ class JobRecord(
     val lockKey: String? = null,
     val maxConcurrentJobs: Int? = null,
     val concurrencyKey: String? = null,
+    /** Null inherits the type/global limit; non-positive disables heartbeat timeout. */
+    val timeoutSeconds: Int? = null,
+    /** Maximum elapsed seconds per attempt. Null inherits; non-positive disables the limit. */
+    val maxRuntimeSeconds: Int? = null,
 ) : Data() {
 }

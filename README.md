@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.11")
+implementation("com.github.TekFive:keep:v1.0.12")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -521,10 +521,26 @@ any `RUNNING` record that carries its own identifier and started before the coor
 `reclaimOrphanedJobsOnStart` to `false` on the `JobConfiguration` if several processes share an
 identifier.
 
-Records left `RUNNING` by another process are recovered by timeout detection. A job type whose
-`timeoutSeconds` is zero or negative opts out of that recovery, and the coordinator logs a warning
-for each such type at start. Timeout detection depends on jobs calling `context.checkIn()`;
-check-ins are written on a dedicated connection so they are visible even from inside a
+Records left `RUNNING` by another process are recovered by timeout detection.
+`timeoutSeconds` limits time without a check-in. `maxRuntimeSeconds` limits elapsed
+time since the current attempt started, even when check-ins continue. Queue time
+is excluded; retries and requeued attempts start a new runtime clock.
+
+Pass either limit to `JobRecordsTable.insertJob`. Explicit values override the
+parent dispatch's values, then the job spec's values. Copies and retries retain
+the stored limits. At timeout checks, null values fall back to the spec and then
+configuration. Zero or negative disables that limit independently.
+
+`JOB_DEFAULT_TIMEOUT_SECONDS` defaults to 300; `JOB_DEFAULT_MAX_RUNTIME_SECONDS`
+defaults to 0, disabled. Both are checked each coordinator poll, so deadlines can
+be exceeded by the polling interval or database delays. The new nullable
+`timeout_seconds` and `max_runtime_seconds` columns must exist before deployment.
+
+The callback overload with `JobTimeoutReason` distinguishes `HEARTBEAT` from
+`MAX_RUNTIME`; runtime wins if both have expired. It delegates to the original
+three-argument callback by default. A timeout marks the job `TIMED_OUT`; jobs must
+check in to observe termination, or their callback must interrupt their work.
+Check-ins use a separate connection so they remain visible during a
 `DatabaseTransactionJob` transaction.
 
 Timeout status and `onJobTimedOut` database changes commit together. If the callback

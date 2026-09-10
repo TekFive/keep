@@ -30,6 +30,9 @@ abstract class BaseAckJobConfiguration() : JobConfiguration {
     override val defaultJobTimeoutSeconds: Int
         get() = defaultJobTimeoutSecondsProperty()
 
+    override val defaultJobMaxRuntimeSeconds: Int
+        get() = defaultJobMaxRuntimeSecondsProperty()
+
     override val defaultMinSecondsBetweenJobRetry: Int
         get() = defaultMinSecondsBetweenJobRetryProperty()
 
@@ -48,7 +51,8 @@ abstract class BaseAckJobConfiguration() : JobConfiguration {
         val maximumCandidatesBufferProperty = Ack.int("JOB_MAXIMUM_CANDIDATES_BUFFER", default = { dispatchCountProperty() * 2 }, description = "Maximum number of candidate jobs buffered for dispatch.")
         val maxEstimatedRuntimeRecordsProperty = Ack.int("JOB_MAX_ESTIMATED_RUNTIME_RECORDS", BaseJobConfiguration.DEFAULT_MAX_ESTIMATED_RUNTIME_RECORDS, description = "Number of recent runs used to estimate a job's runtime.")
         val minSecondsBetweenJobCheckinProperty = Ack.int("JOB_MIN_SECONDS_BETWEEN_JOB_CHECKIN", BaseJobConfiguration.DEFAULT_MIN_SECONDS_BETWEEN_JOB_CHECKIN, description = "Minimum seconds between job check-ins while running.")
-        val defaultJobTimeoutSecondsProperty = Ack.int("JOB_DEFAULT_TIMEOUT_SECONDS", BaseJobConfiguration.DEFAULT_JOB_TIMEOUT_SECONDS, description = "Default job execution timeout in seconds.")
+        val defaultJobTimeoutSecondsProperty = Ack.int("JOB_DEFAULT_TIMEOUT_SECONDS", BaseJobConfiguration.DEFAULT_JOB_TIMEOUT_SECONDS, description = "Default seconds without a job check-in before timeout. Zero disables it.")
+        val defaultJobMaxRuntimeSecondsProperty = Ack.int("JOB_DEFAULT_MAX_RUNTIME_SECONDS", BaseJobConfiguration.DEFAULT_JOB_MAX_RUNTIME_SECONDS, description = "Default maximum elapsed seconds per running job attempt, regardless of check-ins. Zero disables it.")
         val defaultMinSecondsBetweenJobRetryProperty = Ack.int("JOB_DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY", BaseJobConfiguration.DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY, description = "Default minimum seconds between job retries.")
         val minSaveLogLevelProperty = Ack.string("JOB_MIN_SAVE_LOG_LEVEL", default = JobRecordLogLevel.INFO.toString(), description = "Minimum log level persisted for job execution logs.")
     }

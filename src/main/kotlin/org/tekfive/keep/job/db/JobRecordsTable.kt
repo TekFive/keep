@@ -27,6 +27,7 @@ import org.tekfive.keep.data.uniqueConstraint
 import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobSpec
 import org.tekfive.keep.job.JobState
+import org.tekfive.keep.job.JobTimeoutReason
 import org.tekfive.keep.job.dispatch.DispatchContext
 import org.tekfive.keep.job.schedule.ScheduledJobSpec
 import org.tekfive.keep.json.jsonObject
@@ -54,6 +55,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val lockKey = varchar("lock_key", 255).nullable()
     val maxConcurrentJobs = integer("max_concurrent_jobs").nullable()
     val concurrencyKey = varchar("concurrency_key", 255).nullable()
+    val timeoutSeconds = integer("timeout_seconds").nullable()
+    val maxRuntimeSeconds = integer("max_runtime_seconds").nullable()
 
     override val customIndices = listOf(
         "CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq ON $tableName (type, lock_key) WHERE state = ${JobState.RUNNING.id} AND lock_key IS NOT NULL",
@@ -84,6 +87,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 lockKey = copy.lockKey,
                 maxConcurrentJobs = copy.maxConcurrentJobs,
                 concurrencyKey = copy.concurrencyKey,
+                timeoutSeconds = copy.timeoutSeconds,
+                maxRuntimeSeconds = copy.maxRuntimeSeconds,
             ))
         }
     }
@@ -195,6 +200,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         lockKey: String? = null,
         maxConcurrentJobs: Int? = null,
         concurrencyKey: String? = null,
+        timeoutSeconds: Int? = null,
+        maxRuntimeSeconds: Int? = null,
     ): Long {
         var estimatedRuntimeSeconds: Int? = null
         if (maxEstimatedRuntimeRecords > 0) {
@@ -250,6 +257,12 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 lockKey = resolvedLockKey,
                 maxConcurrentJobs = resolvedMaxConcurrentJobs,
                 concurrencyKey = resolvedConcurrencyKey,
+                timeoutSeconds = timeoutSeconds
+                    ?: (parentJobContext as? DispatchContext)?.jobRecord?.timeoutSeconds
+                    ?: spec.timeoutSeconds,
+                maxRuntimeSeconds = maxRuntimeSeconds
+                    ?: (parentJobContext as? DispatchContext)?.jobRecord?.maxRuntimeSeconds
+                    ?: spec.maxRuntimeSeconds,
             )
             create(jobRecord)
             jobRecord.id
@@ -354,11 +367,15 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
-    internal fun tryMarkTimedOut(jobRecordId: Long, cutoffAt: Long, endedAt: Long, failureDetails: String? = null): JobRecord? {
+    internal fun tryMarkTimedOut(jobRecordId: Long, cutoffAt: Long, endedAt: Long, failureDetails: String? = null, reason: JobTimeoutReason = JobTimeoutReason.HEARTBEAT): JobRecord? {
         return db {
-            val timedOutPredicate =
-                ((lastCheckInAt.isNotNull()) and (lastCheckInAt lessEq cutoffAt)) or
-                    ((lastCheckInAt.isNull()) and (startedAt.isNotNull()) and (startedAt lessEq cutoffAt))
+            // Recheck in SQL: heartbeats can extend only the heartbeat deadline; completed jobs stay terminal.
+            val timedOutPredicate = when (reason) {
+                JobTimeoutReason.HEARTBEAT ->
+                    ((lastCheckInAt.isNotNull()) and (lastCheckInAt lessEq cutoffAt)) or
+                        ((lastCheckInAt.isNull()) and (startedAt.isNotNull()) and (startedAt lessEq cutoffAt))
+                JobTimeoutReason.MAX_RUNTIME -> (startedAt.isNotNull()) and (startedAt lessEq cutoffAt)
+            }
 
             val result = updateReturning(
                 where = {

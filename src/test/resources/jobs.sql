@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS job_records (
     scheduled_job BOOLEAN NOT NULL DEFAULT FALSE,
     lock_key VARCHAR(255),
     max_concurrent_jobs INT,
-    concurrency_key VARCHAR(255)
+    concurrency_key VARCHAR(255),
+    timeout_seconds INT,
+    max_runtime_seconds INT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq

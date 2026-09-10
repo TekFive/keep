@@ -19,6 +19,9 @@ interface JobConfiguration {
     val defaultJobTimeoutSeconds: Int
         get() = BaseJobConfiguration.DEFAULT_JOB_TIMEOUT_SECONDS
 
+    val defaultJobMaxRuntimeSeconds: Int
+        get() = BaseJobConfiguration.DEFAULT_JOB_MAX_RUNTIME_SECONDS
+
     val defaultMinSecondsBetweenJobRetry: Int
 
     val minSaveLogLevel: JobRecordLogLevel?
@@ -52,6 +55,8 @@ abstract class BaseJobConfiguration() : JobConfiguration {
 
     override val defaultJobTimeoutSeconds: Int = DEFAULT_JOB_TIMEOUT_SECONDS
 
+    override val defaultJobMaxRuntimeSeconds: Int = DEFAULT_JOB_MAX_RUNTIME_SECONDS
+
     override val defaultMinSecondsBetweenJobRetry: Int = DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY
 
     override val minSaveLogLevel: JobRecordLogLevel? = DEFAULT_MIN_SAVE_LOG_LEVEL
@@ -66,6 +71,7 @@ abstract class BaseJobConfiguration() : JobConfiguration {
         const val DEFAULT_MAX_ESTIMATED_RUNTIME_RECORDS: Int = 10
         const val DEFAULT_MIN_SECONDS_BETWEEN_JOB_CHECKIN: Int = 30
         const val DEFAULT_JOB_TIMEOUT_SECONDS: Int = 60 * 5
+        const val DEFAULT_JOB_MAX_RUNTIME_SECONDS: Int = 0
         const val DEFAULT_MIN_SECONDS_BETWEEN_JOB_RETRY: Int = 60 * 5
         val DEFAULT_MIN_SAVE_LOG_LEVEL: JobRecordLogLevel? = null
     }
