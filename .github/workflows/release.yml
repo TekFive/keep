@@ -64,8 +64,11 @@ jobs:
           repository_name="${GITHUB_REPOSITORY#*/}"
           pom_url="https://jitpack.io/com/github/${repository_owner}/${repository_name}/${RELEASE_TAG}/${repository_name}-${RELEASE_TAG}.pom"
 
-          for attempt in {1..10}; do
-            echo "Requesting JitPack artifact (attempt ${attempt}/10): ${pom_url}"
+          deadline=$((SECONDS + 840))
+          attempt=0
+          while (( SECONDS < deadline )); do
+            attempt=$((attempt + 1))
+            echo "Requesting JitPack artifact (attempt ${attempt}): ${pom_url}"
             if curl \
               --fail \
               --location \
@@ -79,9 +82,7 @@ jobs:
               exit 0
             fi
 
-            if (( attempt < 10 )); then
-              sleep 15
-            fi
+            sleep 15
           done
 
           echo "JitPack did not publish ${RELEASE_TAG} within the allowed time." >&2

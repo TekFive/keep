@@ -11,7 +11,7 @@ import org.tekfive.keep.db.db
 import org.tekfive.keep.job.Job
 import java.sql.Connection
 import java.sql.SQLException
-import kotlin.math.roundToInt
+import java.util.concurrent.TimeUnit
 
 internal class DispatchContext(
     val minSecondsBetweenCheckIn: Int,
@@ -21,6 +21,7 @@ internal class DispatchContext(
     val jobsTable: JobRecordsTable,
     minSaveLogLevel: JobRecordLogLevel?,
     override val startedAt: Long = System.currentTimeMillis(),
+    timeoutSeconds: Int = jobRecord.timeoutSeconds ?: jobSpec.timeoutSeconds ?: 0,
 ) : JobContext {
 
     override val jobId: Long = jobRecord.id
@@ -34,6 +35,13 @@ internal class DispatchContext(
     override val log: JobLogger = JobLogger(job, this, minSaveLogLevel)
 
 
+    // Persist check-ins before short per-job deadlines, including subsecond intervals.
+    private val checkInMillis = if (timeoutSeconds > 0) {
+        minOf(TimeUnit.SECONDS.toMillis(minSecondsBetweenCheckIn.toLong()), TimeUnit.SECONDS.toMillis(timeoutSeconds.toLong()) / 2)
+    } else {
+        TimeUnit.SECONDS.toMillis(minSecondsBetweenCheckIn.toLong())
+    }
+
     var lastCheckInAt = startedAt
         private set
 
@@ -43,8 +51,7 @@ internal class DispatchContext(
 
     @Synchronized
     override fun checkIn(now: Long) {
-        val secondsSinceLastCheckIn = ((now - lastCheckInAt) / 1000.0).roundToInt()
-        if (secondsSinceLastCheckIn >= minSecondsBetweenCheckIn) {
+        if (now - lastCheckInAt >= checkInMillis) {
             lastCheckInAt = now
             val jobState = try {
                 db { jobsTable.updateLastCheckIn(jobRecord.id, lastCheckInAt) }

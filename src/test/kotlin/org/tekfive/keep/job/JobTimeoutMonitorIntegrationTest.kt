@@ -277,6 +277,24 @@ class JobTimeoutMonitorIntegrationTest {
         assertEquals(healthyId, healthySpec.timedOutJob?.id)
     }
 
+    @Test
+    fun `short heartbeat limits reduce check-in throttling`() {
+        val spec = TimeoutSpec("short-heartbeat", timeoutSeconds = 2)
+        for (override in listOf<Int?>(null, 1, 0)) {
+            val id = runningJob(spec, 100_000L, null, timeoutSeconds = override)
+            val context = DispatchContext(
+                30,
+                object : Job { override fun execute(context: JobContext): JobResult = JobCompleted() },
+                spec, load(id), JobRecordsTable, null, startedAt = 100_000L,
+            )
+            val interval = when (override) { 1 -> 500L; 0 -> 30_000L; else -> 1_000L }
+            context.checkIn(100_000L + interval - 1)
+            assertNull(load(id).lastCheckInAt)
+            context.checkIn(100_000L + interval)
+            assertEquals(100_000L + interval, load(id).lastCheckInAt)
+        }
+    }
+
     private fun monitor(defaultTimeoutSeconds: Int, vararg specs: JobSpec, maxRuntimeSeconds: Int = 0): JobTimeoutMonitor {
         val registry = JobRegistry()
         specs.forEach { registry += it }

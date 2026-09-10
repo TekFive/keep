@@ -74,6 +74,7 @@ internal class Dispatcher(
                 jobRecord,
                 jobsTable,
                 jobConfiguration.minSaveLogLevel,
+                timeoutSeconds = jobRecord.timeoutSeconds ?: jobSpec.timeoutSeconds ?: jobConfiguration.defaultJobTimeoutSeconds,
             )
             dispatchContext = context
 

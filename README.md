@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.12")
+implementation("com.github.TekFive:keep:v1.0.13")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -520,6 +520,10 @@ any `RUNNING` record that carries its own identifier and started before the coor
 `PENDING`, on the assumption that the previous process died without finishing it. Set
 `reclaimOrphanedJobsOnStart` to `false` on the `JobConfiguration` if several processes share an
 identifier.
+
+Heartbeat check-ins are throttled to at most half the effective timeout, even
+when a job overrides the global limit. A one-second timeout permits check-ins
+every 500 milliseconds. Jobs still need to call `checkIn()` often enough.
 
 Records left `RUNNING` by another process are recovered by timeout detection.
 `timeoutSeconds` limits time without a check-in. `maxRuntimeSeconds` limits elapsed
