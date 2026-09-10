@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.6")
+implementation("com.github.TekFive:keep:v1.0.11")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -526,6 +526,13 @@ Records left `RUNNING` by another process are recovered by timeout detection. A 
 for each such type at start. Timeout detection depends on jobs calling `context.checkIn()`;
 check-ins are written on a dedicated connection so they are visible even from inside a
 `DatabaseTransactionJob` transaction.
+
+Timeout status and `onJobTimedOut` database changes commit together. If the callback
+throws, both roll back and a later sweep retries, including after a restart.
+External callback effects must be idempotent because they cannot roll back.
+
+Call `coordinator.stop(waitForStop = true)` during application shutdown to wait for
+interrupted jobs to finish cleanup and persist their state before closing dependencies.
 
 `JobResult` and the exceptions the framework uses to end a job extend `Exception`. A job body that
 catches `Exception` broadly will swallow `throw JobCompleted()` style signals and the cancellation

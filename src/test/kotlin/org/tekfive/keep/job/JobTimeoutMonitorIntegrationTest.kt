@@ -12,6 +12,7 @@ import org.tekfive.keep.job.db.DatabaseGatekeeper
 import org.tekfive.keep.job.db.JobRecord
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.job.db.PostgresTestSupport
+import org.tekfive.jfk.json
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -101,6 +102,62 @@ class JobTimeoutMonitorIntegrationTest {
 
         assertEquals(JobState.RUNNING, load(jobId).state)
         assertNull(spec.timedOutJob)
+    }
+
+    @Test
+    fun `failed callback rolls back timeout and retries after monitor restart`() {
+        val now = 20_000L
+        var attempts = 0
+        val spec = object : JobSpec {
+            override val jobTypeIdentifier = "retry-timeout-callback"
+            override fun createJob(): Job = error("Not dispatched")
+
+            override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
+                attempts++
+                db { JobRecordsTable.updateJobDetails(jobRecord.id, json { "cleaned" set true }) }
+                if (attempts == 1) {
+                    error("Callback failed after updating application state")
+                }
+            }
+        }
+        val jobId = runningJob(spec, startedAt = 0L, lastCheckInAt = null)
+
+        monitor(10, spec).sweep(now)
+
+        val pending = load(jobId)
+        assertEquals(JobState.RUNNING, pending.state)
+        assertNull(pending.endedAt)
+        assertNull(pending.failureDetails)
+        assertNull(pending.jobDetails)
+
+        // Retry must survive losing all in-memory monitor state.
+        val restarted = monitor(10, spec)
+        restarted.sweep(now)
+        restarted.sweep(now)
+
+        assertEquals(2, attempts)
+        assertEquals(JobState.TIMED_OUT, load(jobId).state)
+        assertEquals(true, load(jobId).jobDetails?.get("cleaned")?.boolean)
+    }
+
+    @Test
+    fun `failed timeout callback does not block other expired jobs`() {
+        val failedSpec = object : JobSpec {
+            override val jobTypeIdentifier = "failed-timeout-callback"
+            override fun createJob(): Job = error("Not dispatched")
+            override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
+                error("Callback unavailable")
+            }
+        }
+        val healthySpec = TimeoutSpec("healthy-timeout-callback")
+        val failedId = runningJob(failedSpec, startedAt = 0L, lastCheckInAt = null)
+        val healthyId = runningJob(healthySpec, startedAt = 0L, lastCheckInAt = null)
+
+        monitor(10, failedSpec, healthySpec).sweep(20_000L)
+
+        assertEquals(JobState.RUNNING, load(failedId).state)
+        assertEquals(JobState.TIMED_OUT, load(healthyId).state)
+        assertEquals(healthyId, healthySpec.timedOutJob?.id)
     }
 
     private fun monitor(defaultTimeoutSeconds: Int, vararg specs: JobSpec): JobTimeoutMonitor {

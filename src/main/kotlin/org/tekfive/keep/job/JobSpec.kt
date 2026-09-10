@@ -62,6 +62,10 @@ interface JobSpec {
     val maxConcurrentJobs: Int?
         get() = if (exclusiveExecution) 1 else null
 
+    /**
+     * Runs in the timeout transaction. Failure rolls back database changes and
+     * retries on a later sweep. External effects must be idempotent.
+     */
     fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
     }
 }

@@ -35,19 +35,21 @@ internal class JobTimeoutMonitor(
             if (lastActivityAt > cutoffAt) continue
 
             val failureDetails = "Job timed out after $timeoutSeconds seconds without checking in."
-            val timedOutJob = try {
+            try {
                 databaseGatekeeper {
-                    db { jobsTable.tryMarkTimedOut(jobRecord.id, cutoffAt, now, failureDetails) }
+                    // Commit the timeout and application cleanup together so failures can retry.
+                    db {
+                        val timedOutJob = jobsTable.tryMarkTimedOut(jobRecord.id, cutoffAt, now, failureDetails)
+                            ?: return@db
+                        spec.onJobTimedOut(timedOutJob, now, timeoutSeconds)
+                    }
                 }
             } catch (e: SQLException) {
                 databaseGatekeeper.onSQLException(e)
-                null
-            } ?: continue
-
-            try {
-                spec.onJobTimedOut(timedOutJob, now, timeoutSeconds)
+            } catch (e: InterruptedException) {
+                throw e
             } catch (e: Exception) {
-                log.warn("Job timeout handler failed for job {} of type {}.", timedOutJob.id, timedOutJob.type, e)
+                log.warn("Job timeout handler failed for job {} of type {}; will retry.", jobRecord.id, jobRecord.type, e)
             }
         }
     }
