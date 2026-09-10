@@ -83,7 +83,7 @@ object DbConnection {
 
     val useConnectionPool = Ack.boolean("POOL_JDBC_CONNECTIONS", false, description = "Whether to use a HikariCP connection pool.")
 
-    val maximumPoolSize = Ack.int("JDBC_CONNECTION_MAX", 10, description = "Maximum size of the JDBC connection pool.")
+    val maximumPoolSize = Ack.int("JDBC_CONNECTION_MAX", 25, description = "Maximum size of the JDBC connection pool.")
 
     val minimumIdle = Ack.int("JDBC_CONNECTION_MIN_IDLE", maximumPoolSize, description = "Minimum number of idle connections in the pool.")
 
@@ -91,7 +91,7 @@ object DbConnection {
 
     val idleTimeoutSeconds = Ack.int("JDBC_CONNECTION_IDLE_TIMEOUT_SECONDS", 600, description = "Idle timeout in seconds before a pooled connection is retired.")
 
-    val connectionTimeoutSeconds = Ack.int("JDBC_CONNECTION_TIMEOUT_SECONDS", 5, description = "Seconds to wait for a connection from the pool before failing.")
+    val connectionTimeoutSeconds = Ack.int("JDBC_CONNECTION_TIMEOUT_SECONDS", 30, description = "Seconds to wait for a connection from the pool before failing.")
 
     // Logs a stack trace if a connection is held too long. This is your "smoke detector" for unclosed transactions.
     val leakDetectionThresholdSeconds = Ack.int("JDBC_CONNECTION_LEAK_DETECTION_THRESHOLD_SECONDS", 30, description = "Seconds a connection may be held before a leak is logged.")

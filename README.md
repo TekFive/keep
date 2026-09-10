@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.13")
+implementation("com.github.TekFive:keep:v1.0.14")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -183,6 +183,14 @@ check(patient.id.version() == 7)
 ```
 
 UUID counterparts are available for views, join tables, database tuple caches, unique-name checks, and foreign keys. `TypedDataJoinTable` can be used when an association spans different identity types. The generated UUID default is an Exposed client default, so inserts performed outside Exposed must supply an `id` explicitly.
+
+### Database Connections
+
+`DbConnection.startup()` reads connection settings through ACK. Pooling is disabled
+by default; enable it with `POOL_JDBC_CONNECTIONS=true`. The pool defaults to
+25 connections (`JDBC_CONNECTION_MAX`) and a 30-second wait for an available
+connection (`JDBC_CONNECTION_TIMEOUT_SECONDS`). Register configuration sources
+before startup. Restart the connection provider to apply changes.
 
 ### Transaction Utilities
 
