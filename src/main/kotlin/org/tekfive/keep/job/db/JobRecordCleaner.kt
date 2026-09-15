@@ -18,18 +18,18 @@ import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobResult
 import org.tekfive.keep.job.JobState
 import org.tekfive.keep.job.schedule.FixedIntervalJobSpec
-import kotlin.math.roundToInt
 import kotlin.reflect.KClass
-import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * Periodically deletes terminated (completed) job records from [JobRecordsTable] along with their
  * associated log lines in [JobRecordLogsTable].
  *
  * Retention is split by outcome: [JobState.COMPLETED] (succeeded) records are kept for
- * [completedKeepDaysAck] days, while the other terminal states (failed, cancelled, timed out, etc.)
- * are kept for [failedKeepDaysAck] days, which defaults to the completed keep time when not
- * configured. Age is measured from [JobRecordsTable.endedAt] — when the job reached its terminal
+ * [completedKeepMinutesAck] minutes (default: 240 minutes / 4 hours), while the other terminal
+ * states (failed, cancelled, timed out, etc.) are kept for [failedKeepHoursAck] hours (default: 48).
+ * Age is measured from [JobRecordsTable.endedAt] — when the job reached its terminal
  * state; records without an end time are never purged.
  *
  * [JobRecordLogsTable] references [JobRecordsTable] without an ON DELETE cascade, so the log rows
@@ -54,13 +54,13 @@ class JobRecordCleaner : Job {
         override val intervalSecondsProperty: Ack<Long>
             get() = Ack.long("FIXED_INTERVAL_SECONDS", 24L * 60 * 60, namespace = ackNamespace(getNamespaceClass()), description = "Interval in seconds between job-record cleanup runs.")
 
-        val completedKeepDaysAck = Ack.int("COMPLETED_KEEP_DAYS", 5, min = 0,
+        val completedKeepMinutesAck = Ack.int("COMPLETED_KEEP_MINUTES", 240, min = 0,
             namespace = "JOB_RECORD_CLEANER",
-            description = "Age in days after which successfully completed job records (and their logs) are deleted.")
+            description = "Age in minutes after which successfully completed job records (and their logs) are deleted. Defaults to 240 minutes (4 hours).")
 
-        val failedKeepDaysAck = Ack.int("FAILED_KEEP_DAYS", min = 0,
+        val failedKeepHoursAck = Ack.int("FAILED_KEEP_HOURS", 48, min = 0,
             namespace = "JOB_RECORD_CLEANER",
-            description = "Age in days after which failed job records (failed, cancelled, timed out, etc.) and their logs are deleted. Defaults to the completed keep time.") { completedKeepDaysAck().let { it + (it * 0.5).roundToInt() } }
+            description = "Age in hours after which failed job records (failed, cancelled, timed out, etc.) and their logs are deleted. Defaults to 48 hours.")
 
         private val failedStates = JobState.terminatedStates.filter { it != JobState.COMPLETED }
 
@@ -74,8 +74,8 @@ class JobRecordCleaner : Job {
 
     override fun execute(context: JobContext): JobResult {
         val now = System.currentTimeMillis()
-        val completedCutoffAt = now - completedKeepDaysAck().days.inWholeMilliseconds
-        val failedCutoffAt = now - failedKeepDaysAck().days.inWholeMilliseconds
+        val completedCutoffAt = now - completedKeepMinutesAck().minutes.inWholeMilliseconds
+        val failedCutoffAt = now - failedKeepHoursAck().hours.inWholeMilliseconds
 
         var recordsDeleted = 0
         var logsDeleted = 0

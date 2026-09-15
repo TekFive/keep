@@ -18,6 +18,8 @@ import org.testcontainers.junit.jupiter.Testcontainers
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 @Testcontainers
 class JobRecordCleanerIntegrationTest {
@@ -31,13 +33,17 @@ class JobRecordCleanerIntegrationTest {
         @JvmStatic
         fun initSchema() {
             PostgresTestSupport.initSchema(postgres)
+            configure()
+            DbConnection.startup()
+        }
+
+        private fun configure(retention: Map<String, String> = emptyMap()) {
             AckRegistry.clear()
             AckRegistry.addSource(MapSource(mapOf(
                 "JDBC_URL" to postgres.jdbcUrl,
                 "JDBC_USER" to postgres.username,
                 "JDBC_PASSWORD" to postgres.password,
-            )))
-            DbConnection.startup()
+            ) + retention))
         }
 
         @AfterAll
@@ -50,6 +56,7 @@ class JobRecordCleanerIntegrationTest {
 
     @BeforeEach
     fun cleanUp() {
+        configure()
         PostgresTestSupport.truncateJobsTable(postgres)
     }
 
@@ -130,6 +137,47 @@ class JobRecordCleanerIntegrationTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `default retention keeps successful jobs for four hours and other terminal jobs for forty eight hours`() {
+        assertRetention(completedMinutes = 240, failedHours = 48)
+    }
+
+    @Test
+    fun `configured retention uses minutes for successful jobs and hours for other terminal jobs`() {
+        configure(mapOf(
+            "JOB_RECORD_CLEANER_COMPLETED_KEEP_MINUTES" to "30",
+            "JOB_RECORD_CLEANER_FAILED_KEEP_HOURS" to "6",
+        ))
+        assertRetention(completedMinutes = 30, failedHours = 6)
+    }
+
+    @Test
+    fun `failed retention default is independent of successful retention`() {
+        configure(mapOf("JOB_RECORD_CLEANER_COMPLETED_KEEP_MINUTES" to "30"))
+        assertRetention(completedMinutes = 30, failedHours = 48)
+    }
+
+    private fun assertRetention(completedMinutes: Int, failedHours: Int) {
+        val now = System.currentTimeMillis()
+        JobState.terminatedStates.forEach { state ->
+            val keepTime = if (state == JobState.COMPLETED) completedMinutes.minutes else failedHours.hours
+            insertEndedJobs("expired-$state", 1, state, now - (keepTime + 1.minutes).inWholeMilliseconds)
+            insertEndedJobs("retained-$state", 1, state, now - (keepTime - 1.minutes).inWholeMilliseconds)
+            insertLogsForType("expired-$state")
+            insertLogsForType("retained-$state")
+        }
+
+        val cleaner = JobRecordCleaner()
+        cleaner.execute(RecordingJobContext(cleaner))
+
+        JobState.terminatedStates.forEach { state ->
+            assertEquals(0, countRecords("expired-$state"), "Expired $state records should be deleted")
+            assertEquals(1, countRecords("retained-$state"), "Recent $state records should be retained")
+            assertEquals(1, countLogs("retained-$state"))
+        }
+        assertEquals(JobState.terminatedStates.size, countAllLogs())
     }
 
     @Test

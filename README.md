@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.14")
+implementation("com.github.TekFive:keep:v1.0.15")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -565,6 +565,21 @@ interrupted jobs to finish cleanup and persist their state before closing depend
 `JobResult` and the exceptions the framework uses to end a job extend `Exception`. A job body that
 catches `Exception` broadly will swallow `throw JobCompleted()` style signals and the cancellation
 raised by `checkIn()`, so catch specific exception types or rethrow `JobResult` instances.
+
+#### Job record retention
+
+`JobRecordCleaner` deletes terminal job records and their logs based on the time the job ended:
+
+| Setting | Default | Applies to |
+| --- | --- | --- |
+| `JOB_RECORD_CLEANER_COMPLETED_KEEP_MINUTES` | `240` (4 hours) | Successfully completed jobs |
+| `JOB_RECORD_CLEANER_FAILED_KEEP_HOURS` | `48` (48 hours) | Other terminal states, including failed, cancelled, and timed-out jobs |
+
+Both settings accept nonnegative integers. They replace `JOB_RECORD_CLEANER_COMPLETED_KEEP_DAYS`
+and `JOB_RECORD_CLEANER_FAILED_KEEP_DAYS`; update existing configuration keys and convert their
+values to the new units. The failed-job default is independent of the successful-job setting.
+Records without an end time are retained. Cleanup runs once every 24 hours by default, so expired
+records are deleted on the next cleanup run.
 
 ### Paging and Schema Helpers
 
