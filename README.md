@@ -137,6 +137,8 @@ Composite properties can use an existing `ColumnGroup` with
 the concrete group, so individual columns remain accessible (for example, `address.city`).
 The group defines its columns' names and nullability and must create them on the receiving table.
 Use the same Kotlin property name on the table and data class for automatic mapping.
+For an `Address?` property, use `column(LocationData::address, OptionalAddressColumnGroup(this))`.
+Writing `null` clears all four address columns; reading an all-null row returns an empty `Address`.
 
 Scalar `DataEnum` properties use an `_id` suffix by default (`status` becomes `status_id`); an
 explicit `name` is used unchanged.

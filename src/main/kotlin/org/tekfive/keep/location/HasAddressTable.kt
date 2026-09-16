@@ -30,7 +30,8 @@ class AddressColumnGroup(table: Table) : ColumnGroup<Address> {
     }
 }
 
-class OptionalAddressColumnGroup(table: Table) : ColumnGroup<Address> {
+/** Accepts null addresses on writes and maps rows to an [Address], including empty addresses. */
+class OptionalAddressColumnGroup(table: Table) : ColumnGroup<Address?> {
     val street: Column<String?> = table.optionalStreet()
     val city: Column<String?> = table.optionalCity()
     val state: Column<State?> = table.optionalState()
@@ -42,11 +43,11 @@ class OptionalAddressColumnGroup(table: Table) : ColumnGroup<Address> {
         return Address(row[street], row[city], row[state], row[zip])
     }
 
-    override fun mapColumns(value: Address, statement: ColumnValueMapper) {
-        statement[street] = value.street?.ifBlank { null }
-        statement[city] = value.city?.ifBlank { null }
-        statement[state] = value.state
-        statement[zip] = value.zip?.ifBlank { null }
+    override fun mapColumns(value: Address?, statement: ColumnValueMapper) {
+        statement[street] = value?.street?.ifBlank { null }
+        statement[city] = value?.city?.ifBlank { null }
+        statement[state] = value?.state
+        statement[zip] = value?.zip?.ifBlank { null }
     }
 }
 
