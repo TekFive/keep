@@ -132,6 +132,12 @@ numeric types, booleans, UUIDs, binary values, JFK JSON values, `DataEnum` value
 lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `default`, `index`,
 `uniqueIndex`, and `check` can still be chained onto the resulting column.
 
+Composite properties can use an existing `ColumnGroup` with
+`val address = column(LocationData::address, AddressColumnGroup(this))`. The overload returns
+the concrete group, so individual columns remain accessible (for example, `address.city`).
+The group defines its columns' names and nullability and must create them on the receiving table.
+Use the same Kotlin property name on the table and data class for automatic mapping.
+
 Scalar `DataEnum` properties use an `_id` suffix by default (`status` becomes `status_id`); an
 explicit `name` is used unchanged.
 

@@ -51,6 +51,23 @@ fun KProperty1<*, *>.standardColumnName(): String = name
     .lowercase()
 
 /**
+ * Returns [group] for a property of its mapped value type, preserving the concrete group type.
+ *
+ * The group must already have created its columns on this table; their names and nullability
+ * remain defined by the group. Declare the returned group under the same Kotlin property name
+ * as [property] for automatic [DataTable] mapping, just like other [column] overloads.
+ */
+fun <D, E, G : ColumnGroup<E>> Table.column(
+    property: KProperty1<D, E>,
+    group: G,
+): G {
+    require(group.columns.all { it.table === this }) {
+        "Column group for '${property.name}' must contain only columns from table '$tableName'"
+    }
+    return group
+}
+
+/**
  * Registers a column whose SQL type and nullability are inferred from [property].
  *
  * A name is derived from the Kotlin property using [standardColumnName] unless [name] is supplied.

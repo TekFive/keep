@@ -23,7 +23,7 @@ import org.tekfive.keep.utils.ColumnValueMapper
  *
  * object Locations : DataTable<LocationData>("locations") {
  *     val name = varchar("name", 255)
- *     val address = AddressColumnGroup(this)
+ *     val address = column(LocationData::address, AddressColumnGroup(this))
  * }
  * ```
  */
