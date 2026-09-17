@@ -173,6 +173,13 @@ precision; `TIMESTAMP WITH TIME ZONE` uses PostgreSQL's native temporal represen
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
 
+Unsaved `UuidData` objects return a stable temporary UUID from `id`. Like a temporary negative ID,
+it identifies the instance without marking it as persisted: `idOrNull` remains null, `linkedToDb`
+remains false, and `save()` inserts a new row. Saving replaces the exposed ID with the persisted
+UUIDv7 (or an explicitly supplied ID). Unlinking or deleting the object restores its temporary ID.
+Temporary IDs are not automatically persisted or included in default JSON and do not affect
+equality or dirty tracking. Long-ID `Data` objects continue to require saving before accessing `id`.
+
 KEEP also supports UUIDv7 primary keys as an additive alternative to the existing shared-sequence `Long` strategy. Extend `UuidData` and `UuidDataTable`; the table creates a native PostgreSQL `UUID` column and generates UUIDv7 values in the client, so PostgreSQL 16 and later are supported without an extension or server-side UUID function.
 
 ```kotlin
@@ -351,6 +358,36 @@ Typed objects participate in fresh-install generation, `AppSchema.create()`, and
 comparison. KEEP creates missing objects and replaces changed unique constraints, trigger
 functions, or trigger definitions. Re-running migration planning after applying the generated SQL
 is idempotent.
+
+For a single column on a KEEP `DataTable` or `UuidDataTable`, use the chainable helper:
+
+```kotlin
+import org.tekfive.keep.data.uniqueNonNullUniqueIndex
+
+val url = column(OpportunityArticle::url).uniqueNonNullUniqueIndex()
+```
+
+This enforces PostgreSQL 15+ `UNIQUE NULLS NOT DISTINCT`: non-null values must be unique, and
+at most one row can have a null URL. An optional `customIndexName` sets the constraint/index name;
+the default is `<table>_<column>_uq`. KEEP's schema creation and migration APIs collect it
+automatically, alongside any `postgresObjects` declared on the table.
+
+For composite keys or explicit table-level declarations, use:
+
+```kotlin
+override val postgresObjects = postgresObjects {
+    uniqueConstraint("users_email_uq", email, nullsNotDistinct = true)
+    // Composite keys also treat nulls as equal when comparing the entire key.
+    uniqueConstraint("users_tenant_alias_uq", tenantId, alias, nullsNotDistinct = true)
+}
+```
+
+The single-column constraint allows at most one null email. The composite constraint allows
+one null alias per tenant, while different tenants can each have a null alias. The option defaults
+to `false`, preserving PostgreSQL's usual behavior of allowing multiple nulls. Fresh-install
+generation rejects this option for targets older than PostgreSQL 15, and migration planning
+detects changes to the option and recreates the constraint. Existing conflicting rows must be
+resolved before applying a migration that enables it.
 
 ### PostgreSQL Migration Generation
 

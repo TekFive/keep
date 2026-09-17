@@ -49,11 +49,18 @@ class PostgresUniqueConstraintDefinition internal constructor(
     override val name: String,
     override val table: Table,
     val columns: List<Column<*>>,
+    val nullsNotDistinct: Boolean = false,
 ) : PostgresSchemaObject {
-    override fun createStatements(context: PostgresRenderContext): List<String> = listOf(
-        "ALTER TABLE ${context.tableName(table)} ADD CONSTRAINT ${context.identifier(name)} " +
-            "UNIQUE (${columns.joinToString { context.identifier(it.name) }})"
-    )
+    override fun createStatements(context: PostgresRenderContext): List<String> {
+        require(!nullsNotDistinct || context.targetVersion.major >= 15) {
+            "UNIQUE NULLS NOT DISTINCT requires PostgreSQL 15 or newer (constraint $name)"
+        }
+        val nullTreatment = if (nullsNotDistinct) " NULLS NOT DISTINCT" else ""
+        return listOf(
+            "ALTER TABLE ${context.tableName(table)} ADD CONSTRAINT ${context.identifier(name)} " +
+                "UNIQUE$nullTreatment (${columns.joinToString { context.identifier(it.name) }})"
+        )
+    }
 }
 
 /** A PostgreSQL row trigger and its generated PL/pgSQL trigger function. */
@@ -114,12 +121,13 @@ class PostgresTableObjectsBuilder internal constructor(
 ) {
     private val objects = mutableListOf<PostgresSchemaObject>()
 
-    fun uniqueConstraint(name: String, vararg columns: Column<*>) {
+    /** Treats nulls as equal when [nullsNotDistinct] is true (PostgreSQL 15+). */
+    fun uniqueConstraint(name: String, vararg columns: Column<*>, nullsNotDistinct: Boolean = false) {
         validateName(name, "constraint")
         require(columns.isNotEmpty()) { "PostgreSQL UNIQUE constraint $name requires at least one column" }
         validateColumns(columns.asList())
         require(columns.toSet().size == columns.size) { "UNIQUE constraint $name contains duplicate columns" }
-        objects += PostgresUniqueConstraintDefinition(name, table, columns.asList())
+        objects += PostgresUniqueConstraintDefinition(name, table, columns.asList(), nullsNotDistinct)
     }
 
     fun rowTrigger(

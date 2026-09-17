@@ -43,7 +43,11 @@ abstract class AppSchema(
         runDataTableSql { it.customTypes }
         SchemaUtils.create(*tables.toTypedArray())
         runDataTableSql { it.customIndices }
-        val postgresContext = PostgresRenderContext(schemaName)
+        val metadata = dbConnection().metaData
+        val postgresContext = PostgresRenderContext(
+            schemaName,
+            PostgresTargetVersion(metadata.databaseMajorVersion, metadata.databaseMinorVersion),
+        )
         declaredPostgresObjects
             .sortedBy { if (it is PostgresUniqueConstraintDefinition) 0 else 1 }
             .flatMap { it.createStatements(postgresContext) }

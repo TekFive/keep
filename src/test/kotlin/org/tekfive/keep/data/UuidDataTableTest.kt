@@ -13,6 +13,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -75,12 +77,43 @@ class UuidDataTableTest {
     }
 
     @Test
+    fun `save inserts temporary UUIDs and delete restores the unsaved state`() {
+        transaction {
+            val data = UuidSimpleData("temporary", 42)
+            val temporary = data.id
+            assertFailsWith<IllegalStateException> { UuidSimpleTable.update(data) }
+            assertFailsWith<IllegalStateException> { UuidSimpleTable.delete(data) }
+
+            UuidSimpleTable.save(data)
+            val persisted = data.id
+            assertNotEquals(temporary, persisted)
+            assertEquals(7, persisted.version())
+            assertEquals(persisted, data.idOrNull)
+            assertTrue(data.linkedToDb)
+            assertFalse(data.isDirty)
+            assertNull(UuidSimpleTable.findById(temporary))
+            assertEquals(persisted, UuidSimpleTable.getById(persisted).id)
+
+            UuidSimpleTable.delete(data)
+            assertEquals(temporary, data.id)
+            assertNull(data.idOrNull)
+            assertFalse(data.linkedToDb)
+            UuidSimpleTable.save(data)
+            assertNotEquals(temporary, data.id)
+            assertNotEquals(persisted, data.id)
+        }
+    }
+
+    @Test
     fun `create accepts caller supplied UUID`() {
         transaction {
             val id = UUID.fromString("018f47d2-a6b7-7000-8000-000000000001")
-            val data = UuidSimpleTable.create(UuidSimpleData("known", 7), id)
+            val data = UuidSimpleData("known", 7)
+            val temporary = data.id
+            UuidSimpleTable.create(data, id)
 
             assertEquals(id, data.id)
+            assertNotEquals(temporary, data.id)
             assertEquals("known", UuidSimpleTable.findById(id)?.name)
         }
     }

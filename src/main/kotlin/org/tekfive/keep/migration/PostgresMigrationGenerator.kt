@@ -14,6 +14,7 @@ import org.tekfive.keep.schema.KeepSchema
 import org.tekfive.keep.schema.PostgresRenderContext
 import org.tekfive.keep.schema.PostgresRowTriggerDefinition
 import org.tekfive.keep.schema.PostgresSchemaObject
+import org.tekfive.keep.schema.PostgresTargetVersion
 import org.tekfive.keep.schema.PostgresTriggerEvent
 import org.tekfive.keep.schema.PostgresTriggerTiming
 import org.tekfive.keep.schema.PostgresUniqueConstraintDefinition
@@ -424,7 +425,10 @@ object PostgresMigrationGenerator {
         connection: Connection,
         keepSchema: KeepSchema,
     ): List<CandidateStatement> {
-        val context = PostgresRenderContext(keepSchema.schemaName)
+        val context = PostgresRenderContext(
+            keepSchema.schemaName,
+            PostgresTargetVersion(connection.metaData.databaseMajorVersion, connection.metaData.databaseMinorVersion),
+        )
         return buildList {
             keepSchema.declaredPostgresObjects
                 .sortedBy { if (it is PostgresUniqueConstraintDefinition) 0 else 1 }
@@ -463,23 +467,26 @@ object PostgresMigrationGenerator {
         context: PostgresRenderContext,
         definition: PostgresUniqueConstraintDefinition,
     ): List<CandidateStatement> {
+        val createStatements = definition.createStatements(context)
         val existing = readConstraint(
             connection = connection,
             schemaName = context.schemaName,
             tableName = definition.table.nameInDatabaseCaseUnquoted(),
             constraintName = definition.name,
-        ) ?: return definition.createStatements(context).map(::candidate)
+        ) ?: return createStatements.map(::candidate)
 
         require(existing.type == "u") {
             "PostgreSQL object ${definition.name} on ${definition.table.tableName} exists as " +
                 "constraint type ${existing.type}, not UNIQUE"
         }
         val desiredColumns = definition.columns.map { it.nameUnquoted() }
-        if (existing.columns == desiredColumns) return emptyList()
+        if (existing.columns == desiredColumns && existing.nullsNotDistinct == definition.nullsNotDistinct) {
+            return emptyList()
+        }
 
         val drop = "ALTER TABLE ${context.tableName(definition.table)} " +
             "DROP CONSTRAINT ${context.identifier(definition.name)}"
-        return listOf(candidate(drop)) + definition.createStatements(context).map(::candidate)
+        return listOf(candidate(drop)) + createStatements.map(::candidate)
     }
 
     private fun planRowTrigger(
@@ -533,8 +540,10 @@ object PostgresMigrationGenerator {
     ): ExistingConstraint? = connection.prepareStatement(
         """
         SELECT c.contype::text,
-               array_agg(a.attname ORDER BY key_columns.ordinality)
+               array_agg(a.attname ORDER BY key_columns.ordinality),
+               ${if (connection.metaData.databaseMajorVersion >= 15) "bool_or(i.indnullsnotdistinct)" else "FALSE"}
         FROM pg_constraint c
+        LEFT JOIN pg_index i ON i.indexrelid = c.conindid
         JOIN pg_class relation ON relation.oid = c.conrelid
         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
         LEFT JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS key_columns(attnum, ordinality) ON TRUE
@@ -551,7 +560,7 @@ object PostgresMigrationGenerator {
             val columns = (result.getArray(2)?.array as? Array<*>)
                 .orEmpty()
                 .map { it.toString() }
-            ExistingConstraint(result.getString(1), columns)
+            ExistingConstraint(result.getString(1), columns, result.getBoolean(3))
         }
     }
 
@@ -783,6 +792,7 @@ object PostgresMigrationGenerator {
     private data class ExistingConstraint(
         val type: String,
         val columns: List<String>,
+        val nullsNotDistinct: Boolean,
     )
 
     private data class ExistingTriggerFunction(
