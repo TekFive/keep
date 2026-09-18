@@ -3,6 +3,7 @@ package org.tekfive.keep.data
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
+import org.jetbrains.exposed.v1.core.VarCharColumnType
 import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone as exposedTimestampWithTimeZone
 import org.tekfive.jfk.FromJsonObject
@@ -361,20 +362,39 @@ inline fun <D, reified E> Table.column(
 ): Column<E?> where E : Enum<E>, E : DataEnum =
     (if (encrypted) encryptedDataEnum<E>(name) else dataEnum<E>(name)).nullable().withDataProperty(property)
 
+/** Stores strings as TEXT[], or VARCHAR([maxSize])[] with a character limit per element. */
 @JvmName("columnStringList")
 fun <D> Table.column(
     property: KProperty1<D, List<String>>,
     name: String = property.standardColumnName(),
     encrypted: Boolean = false,
-): Column<List<String>> = (if (encrypted) encryptedStringList(name) else array<String>(name)).withDataProperty(property)
+    maxSize: Int? = null,
+): Column<List<String>> = configureStringListColumn(name, encrypted, maxSize).withDataProperty(property)
 
+/** Nullable counterpart for a list of strings, with an optional character limit per element. */
 @JvmName("columnNullableStringList")
 fun <D> Table.column(
     property: KProperty1<D, List<String>?>,
     name: String = property.standardColumnName(),
     encrypted: Boolean = false,
+    maxSize: Int? = null,
 ): Column<List<String>?> =
-    (if (encrypted) encryptedStringList(name) else array<String>(name)).nullable().withDataProperty(property)
+    configureStringListColumn(name, encrypted, maxSize).nullable().withDataProperty(property)
+
+private fun Table.configureStringListColumn(
+    name: String,
+    encrypted: Boolean,
+    maxSize: Int?,
+): Column<List<String>> {
+    require(name.isNotBlank()) { "Column name must not be blank" }
+    require(maxSize == null || maxSize > 0) { "String list maxSize must be greater than zero" }
+    require(!encrypted || maxSize == null) { "Encrypted string lists cannot enforce maxSize" }
+    return when {
+        encrypted -> encryptedStringList(name)
+        maxSize != null -> array(name, VarCharColumnType(maxSize))
+        else -> array<String>(name)
+    }
+}
 
 @JvmName("columnDataEnumList")
 inline fun <D, reified E> Table.column(

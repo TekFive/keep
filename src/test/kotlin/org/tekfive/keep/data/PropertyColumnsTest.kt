@@ -265,6 +265,47 @@ class PropertyColumnsTest {
     }
 
     @Test
+    fun `configures string lists with an optional character limit per element`() = withPostgresDialect {
+        val table = object : Table("sized_string_lists") {}
+        val tags: Column<List<String>> = table.column(PropertyColumnModel::tags, maxSize = 100)
+        val optionalTags: Column<List<String>?> = table.column(
+            PropertyColumnModel::optionalTags,
+            name = "optional_labels",
+            maxSize = 50,
+        )
+        assertEquals("VARCHAR(100)[]", tags.columnType.sqlType())
+        assertEquals("VARCHAR(50)[]", optionalTags.columnType.sqlType())
+        assertEquals("tags", tags.name)
+        assertEquals("optional_labels", optionalTags.name)
+        assertFalse(tags.columnType.nullable)
+        assertTrue(optionalTags.columnType.nullable)
+        assertEquals(PropertyColumnModel::tags, tags.dataProperty)
+        assertEquals(PropertyColumnModel::optionalTags, optionalTags.dataProperty)
+        assertEquals("TEXT[]", PropertyColumnTable.tags.columnType.sqlType())
+        assertEquals("TEXT[]", PropertyColumnTable.optionalTags.columnType.sqlType())
+    }
+
+    @Test
+    fun `rejects invalid string list sizes and encrypted size limits`() {
+        val table = object : Table("invalid_string_list_options") {}
+        for (size in listOf(0, -1)) {
+            assertFailsWith<IllegalArgumentException> {
+                table.column(PropertyColumnModel::tags, maxSize = size)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                table.column(PropertyColumnModel::optionalTags, maxSize = size)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            table.column(PropertyColumnModel::tags, maxSize = 100, encrypted = true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            table.column(PropertyColumnModel::optionalTags, maxSize = 100, encrypted = true)
+        }
+        assertTrue(table.columns.isEmpty())
+    }
+
+    @Test
     fun `maps JSON object lists to JSONB arrays with property names and nullability`() = withPostgresDialect {
         val required = PropertyColumnTable.jsonObjects
         val optional = PropertyColumnTable.optionalJsonObjects
