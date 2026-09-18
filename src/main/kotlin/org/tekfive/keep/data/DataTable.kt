@@ -44,6 +44,7 @@ abstract class DataTable<D : Data>(
      * `super.mapColumns(data, statement, insert)` for the standard property mapping.
      */
     open fun mapColumns(data: D, statement: ColumnValueMapper, insert: Boolean) {
+        validateMapping()
         if (insert) {
             for ((name, prop) in valProperties) {
                 mapProperty(name, prop, data, statement)

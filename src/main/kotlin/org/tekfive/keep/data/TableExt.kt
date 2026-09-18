@@ -21,7 +21,7 @@ fun <D> Table.fkey(
     target: DataTable<*>,
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
     name: String = property.standardColumnName(),
-): Column<Long> = fkey(name, target, onDelete)
+): Column<Long> = fkey(name, target, onDelete).withDataProperty(property)
 
 /** Nullable counterpart to [fkey] for a nullable long property. */
 @JvmName("fkeyNullableLongProperty")
@@ -30,7 +30,7 @@ fun <D> Table.fkey(
     target: DataTable<*>,
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
     name: String = property.standardColumnName(),
-): Column<Long?> = fkey(name, target, onDelete).nullable()
+): Column<Long?> = fkey(name, target, onDelete).nullable().withDataProperty(property)
 
 /** Creates an indexed UUID column that references a [UuidDataTable] primary key. */
 fun Table.uuidFkey(
@@ -58,7 +58,7 @@ fun <D> Table.fkey(
     target: UuidDataTable<*>,
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
     name: String = property.standardColumnName(),
-): Column<UUID> = fkey(name, target, onDelete)
+): Column<UUID> = fkey(name, target, onDelete).withDataProperty(property)
 
 /** Nullable counterpart to [fkey] for a nullable UUID property. */
 @JvmName("fkeyNullableUuidProperty")
@@ -67,7 +67,7 @@ fun <D> Table.fkey(
     target: UuidDataTable<*>,
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
     name: String = property.standardColumnName(),
-): Column<UUID?> = fkey(name, target, onDelete).nullable()
+): Column<UUID?> = fkey(name, target, onDelete).nullable().withDataProperty(property)
 
 fun Table.timestamp(name: String): Column<Long> {
     return long(name).check("${tableName}_${name}_positive") { it greater 0L }
@@ -78,14 +78,14 @@ fun Table.timestamp(name: String): Column<Long> {
 fun <D> Table.timestamp(
     property: KProperty1<D, Long>,
     name: String = property.standardColumnName(),
-): Column<Long> = timestamp(name)
+): Column<Long> = timestamp(name).withDataProperty(property)
 
 /** Nullable counterpart to [timestamp] for a nullable long property. */
 @JvmName("timestampNullableLongProperty")
 fun <D> Table.timestamp(
     property: KProperty1<D, Long?>,
     name: String = property.standardColumnName(),
-): Column<Long?> = timestamp(name).nullable()
+): Column<Long?> = timestamp(name).nullable().withDataProperty(property)
 
 fun Table.createdAt() = timestamp("created_at")
 

@@ -17,6 +17,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.selectAll
+import org.tekfive.keep.data.dataProperty
 import org.tekfive.jfk.JsonObject
 import org.tekfive.jfk.JsonValue
 import org.tekfive.jfk.ToJsonObject
@@ -193,7 +194,8 @@ abstract class PagedQuery(
     }
 
     /**
-     * The automatic JSON property name for a returned column: the name of the Kotlin property
+     * The automatic JSON property name uses the explicitly bound Data property first, then
+     * the name of the Kotlin property
      * on the column's table object that holds this column (so `val environment =
      * dataEnum<ServiceEnvironment>("environment_id")` serializes as `environment`, matching the
      * Data class property). Falls back to camelCasing the column name when the column has no
@@ -201,7 +203,7 @@ abstract class PagedQuery(
      * registered outside a property.
      */
     private fun Column<*>.jsonPropertyName(): String {
-        return propertyNameFor(this) ?: name.toJsonPropertyName()
+        return dataProperty?.name?.removePrefix("_") ?: propertyNameFor(this) ?: name.toJsonPropertyName()
     }
 
     companion object {

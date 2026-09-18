@@ -34,6 +34,13 @@ fun Table.jsonArray(name: String): Column<JsonArray> = jsonb(
     deserialize = { it.asRequiredJsonArray() },
 )
 
+/** Registers a JSONB column that stores a list of jfk [JsonObject] values as a [JsonArray]. */
+fun Table.jsonObjectList(name: String): Column<List<JsonObject>> = jsonb(
+    name,
+    serialize = { JsonArray(it).toJsonString() },
+    deserialize = { it.asRequiredJsonArray().items.map { item -> item as JsonObject } },
+)
+
 
 /** Registers a JSONB column that stores a single [T] object, serialized via [ToJsonObject]/[FromJsonObject]. */
 fun <T> Table.toFromJson(name: String, fromJson: FromJsonObject<T>): Column<T> where T : Any, T : ToJsonObject = jsonb(

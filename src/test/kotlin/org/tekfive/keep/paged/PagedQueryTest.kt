@@ -3,6 +3,7 @@ package org.tekfive.keep.paged
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.Data
+import org.tekfive.keep.data.column
 import org.tekfive.keep.data.DataTable
 import org.tekfive.keep.data.TestDatabase
 import org.tekfive.kviash.DefaultKviashConfiguration
@@ -37,6 +38,8 @@ class PagedQueryTest {
         assertEquals("workflow", row.reqString("resourceType"))
         assertEquals(42, row["resourceTypeId"].reqInt)
         assertFalse(row.containsKey("resource_type"))
+        assertFalse(row.containsKey("typeColumn"))
+        assertFalse(row.containsKey("storedType"))
         assertFalse(row.containsKey("resource_type_id"))
     }
 
@@ -67,14 +70,14 @@ class PagedQueryTest {
 class PagedQueryTestData(val resourceType: String, val resourceTypeId: Int, val environment: Int) : Data()
 
 object PagedQueryTestTable : DataTable<PagedQueryTestData>("paged_query_test") {
-    val resourceType = varchar("resource_type", 64)
+    val typeColumn = column(PagedQueryTestData::resourceType, name = "stored_type", maxSize = 64)
     val resourceTypeId = integer("resource_type_id")
     val environment = integer("environment_id")
 }
 
 class PagedQueryTestQuery(parameters: HttpRequestParameters) : PagedQuery(PagedQueryTestTable, parameters) {
     init {
-        returnColumn(PagedQueryTestTable.resourceType)
+        returnColumn(PagedQueryTestTable.typeColumn)
         returnColumn(PagedQueryTestTable.resourceTypeId)
         returnColumn(PagedQueryTestTable.environment)
     }

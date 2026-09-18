@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.15")
+implementation("com.github.TekFive:keep:v1.0.19")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -76,7 +76,7 @@ Generate a jar:
 
 ### Data Table Helpers
 
-KEEP provides `Data`, `DataTable`, `DataTuple`, and related table abstractions for mapping Kotlin objects to Exposed tables. Table column property names are matched to primary constructor property names. The managed `id` column is handled by `DataTable`, so domain classes focus on business fields.
+KEEP provides `Data`, `DataTable`, `DataTuple`, and related table abstractions for mapping Kotlin objects to Exposed tables. Columns declared with a property reference map directly to that Data property; other declarations match table property names to primary constructor property names. The managed `id` column is handled by `DataTable`, so domain classes focus on business fields.
 
 Immutable `val` properties are written when a row is inserted. Mutable `var` properties are tracked after create, update, and load operations, so `update` can write only changed fields.
 
@@ -104,6 +104,11 @@ PatientsTable.update(patient)
 Columns can also be configured directly from Kotlin property references. `column` derives
 the PostgreSQL column name (`displayName` becomes `display_name`), chooses the column type, and
 preserves the property's nullability. It works on any Exposed `Table`, not only `DataTable`.
+The returned column retains the reference as `column.dataProperty`. In both `DataTable` and
+`UuidDataTable`, reads, writes, and change tracking use that reference, so the table property
+can have a different name: `val nameColumn = column(Patient::displayName)` maps to `displayName`.
+Mapping validation runs on the first read or write, after table initialization; call
+`validateMapping()` explicitly to check a completed table earlier.
 
 ```kotlin
 class Patient(
@@ -132,11 +137,15 @@ numeric types, booleans, UUIDs, binary values, JFK JSON values, `DataEnum` value
 lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `default`, `index`,
 `uniqueIndex`, and `check` can still be chained onto the resulting column.
 
+For a `List<JsonObject>` property, `val items = column(Model::items)` stores the list as a
+JSONB array and reads it back as `List<JsonObject>`. Nullable lists are also supported;
+no `FromJsonObject` converter is needed.
+
 Composite properties can use an existing `ColumnGroup` with
 `val address = column(LocationData::address, AddressColumnGroup(this))`. The overload returns
 the concrete group, so individual columns remain accessible (for example, `address.city`).
 The group defines its columns' names and nullability and must create them on the receiving table.
-Use the same Kotlin property name on the table and data class for automatic mapping.
+The supplied property reference determines the mapping, so the table group's Kotlin name can differ.
 For an `Address?` property, use `column(LocationData::address, OptionalAddressColumnGroup(this))`.
 Writing `null` clears all four address columns; reading an all-null row returns an empty `Address`.
 

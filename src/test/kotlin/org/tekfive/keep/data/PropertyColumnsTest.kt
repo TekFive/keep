@@ -1,5 +1,6 @@
 package org.tekfive.keep.data
 
+import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.tekfive.jfk.FromJsonObject
@@ -17,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 private enum class PropertyColumnStatus(override val id: Int) : DataEnum {
@@ -57,6 +59,8 @@ private class PropertyColumnModel(
     val jsonValue: JsonValue,
     val jsonObject: JsonObject?,
     val jsonArray: JsonArray,
+    val jsonObjects: List<JsonObject>,
+    val optionalJsonObjects: List<JsonObject>?,
     val status: PropertyColumnStatus,
     val optionalStatus: PropertyColumnStatus?,
     val tags: List<String>,
@@ -109,6 +113,11 @@ private object PropertyColumnTable : Table("property_columns") {
     val jsonValue = column(PropertyColumnModel::jsonValue)
     val jsonObject = column(PropertyColumnModel::jsonObject)
     val jsonArray = column(PropertyColumnModel::jsonArray)
+    val jsonObjects: Column<List<JsonObject>> = column(PropertyColumnModel::jsonObjects)
+    val optionalJsonObjects: Column<List<JsonObject>?> = column(
+        PropertyColumnModel::optionalJsonObjects,
+        name = "optional_objects",
+    )
     val status = column(PropertyColumnModel::status)
     val optionalStatus = column(PropertyColumnModel::optionalStatus)
     val tags = column(PropertyColumnModel::tags)
@@ -176,6 +185,20 @@ class PropertyColumnsTest {
     }
 
     @Test
+    fun `retains property references across every property column overload used by the table`() {
+        for (column in PropertyColumnTable.columns) {
+            assertNotNull(column.dataProperty, "Missing property reference for ${column.name}")
+        }
+        assertEquals(PropertyForeignKeyModel::simpleId, PropertyForeignKeyTable.simpleId.dataProperty)
+        assertEquals(PropertyForeignKeyModel::optionalSimpleId, PropertyForeignKeyTable.optionalSimpleId.dataProperty)
+        assertEquals(PropertyUuidForeignKeyModel::uuidSimpleId, PropertyUuidForeignKeyTable.uuidSimpleId.dataProperty)
+        assertEquals(
+            PropertyUuidForeignKeyModel::optionalUuidSimpleId,
+            PropertyUuidForeignKeyTable.optionalUuidSimpleId.dataProperty,
+        )
+    }
+
+    @Test
     fun `configures scalar columns from property types and nullability`() = withPostgresDialect {
         assertEquals("display_name", PropertyColumnTable.displayName.name)
         assertEquals("items", PropertyColumnTable.itemCount.name)
@@ -239,6 +262,26 @@ class PropertyColumnsTest {
             PropertyColumnTable.parentId.foreignKey?.targetOf(PropertyColumnTable.parentId),
         )
         assertTrue(PropertyColumnTable.optionalParentId.columnType.nullable)
+    }
+
+    @Test
+    fun `maps JSON object lists to JSONB arrays with property names and nullability`() = withPostgresDialect {
+        val required = PropertyColumnTable.jsonObjects
+        val optional = PropertyColumnTable.optionalJsonObjects
+        assertEquals("json_objects", required.name)
+        assertEquals("optional_objects", optional.name)
+        assertEquals("JSONB", required.columnType.sqlType())
+        assertEquals("JSONB", optional.columnType.sqlType())
+        assertFalse(required.columnType.nullable)
+        assertTrue(optional.columnType.nullable)
+
+        val objects = listOf(json { "name" set "first" }, json { "name" set "second" })
+        val encoded = required.columnType.notNullValueToDB(objects)
+        assertEquals("[{\"name\":\"first\"},{\"name\":\"second\"}]", encoded)
+        val decoded = assertNotNull(required.columnType.valueFromDB(encoded))
+        assertEquals(listOf("first", "second"), decoded.map { it.string("name") })
+        assertEquals("[]", required.columnType.notNullValueToDB(emptyList()))
+        assertEquals(emptyList(), required.columnType.valueFromDB("[]"))
     }
 
     @Test

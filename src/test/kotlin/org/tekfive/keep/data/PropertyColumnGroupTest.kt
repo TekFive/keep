@@ -15,20 +15,20 @@ import kotlin.test.assertSame
 class PropertyAddressData(var address: Address) : Data()
 
 object PropertyAddressTable : DataTable<PropertyAddressData>("property_addresses") {
-    val address = column(PropertyAddressData::address, AddressColumnGroup(this))
+    val addressFields = column(PropertyAddressData::address, AddressColumnGroup(this))
 }
 
 class PropertyOptionalAddressData(var address: Address?) : Data()
 
 object PropertyOptionalAddressTable : DataTable<PropertyOptionalAddressData>("property_optional_addresses") {
-    val address = column(PropertyOptionalAddressData::address, OptionalAddressColumnGroup(this))
+    val addressFields = column(PropertyOptionalAddressData::address, OptionalAddressColumnGroup(this))
 }
 
 class PropertyColumnGroupTest {
     @Test
     fun `nullable address properties clear every column on inserts and updates`() {
         val data = PropertyOptionalAddressData(null)
-        val group = PropertyOptionalAddressTable.address
+        val group = PropertyOptionalAddressTable.addressFields
 
         for (insert in listOf(true, false)) {
             val mapper = TestColumnValueMapper()
@@ -39,7 +39,7 @@ class PropertyColumnGroupTest {
 
     @Test
     fun `nullable address properties preserve populated partial and empty address mapping`() {
-        val group = PropertyOptionalAddressTable.address
+        val group = PropertyOptionalAddressTable.addressFields
         for (address in listOf(
             Address("123 Main St", "Springfield", State.IL, "62701"),
             Address(null, "Springfield", null, null),
@@ -70,7 +70,7 @@ class PropertyColumnGroupTest {
     @Test
     fun `optional address groups still normalize blank fields to null`() {
         val mapper = TestColumnValueMapper()
-        val group = PropertyOptionalAddressTable.address
+        val group = PropertyOptionalAddressTable.addressFields
 
         group.mapColumns(Address(" ", "", null, "\t"), mapper)
 
@@ -93,7 +93,7 @@ class PropertyColumnGroupTest {
     fun `maps property column groups through data tables for reads inserts and updates`() {
         val address = Address("123 Main St", "Springfield", State.IL, "62701")
         val data = PropertyAddressData(address)
-        val group = PropertyAddressTable.address
+        val group = PropertyAddressTable.addressFields
         val expected = mapOf<Column<*>, Any?>(
             group.street to address.street,
             group.city to address.city,

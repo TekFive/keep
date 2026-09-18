@@ -28,6 +28,7 @@ abstract class UuidDataTable<D : UuidData>(
     }
 
     open fun mapColumns(data: D, statement: ColumnValueMapper, insert: Boolean) {
+        validateMapping()
         if (insert) {
             valProperties.forEach { (name, property) -> mapProperty(name, property, data, statement) }
         }

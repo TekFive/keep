@@ -18,12 +18,11 @@ class TestColumnValueMapper : ColumnValueMapper {
 
 class DataTableTest {
 
-    // -- Init validation tests ------------------------------------------------
+    // -- Mapping validation tests ---------------------------------------------
 
     @Test
     fun `simple table constructs successfully`() {
-        // SimpleTable is an object, so accessing it triggers construction.
-        // If the init validation fails, this would throw.
+        SimpleTable.validateMapping()
         assertTrue(SimpleTable.columns.any { it.name == "name" })
     }
 
@@ -39,23 +38,23 @@ class DataTableTest {
     }
 
     @Test
-    fun `init fails when column has no matching data property`() {
+    fun `mapping validation fails when column has no matching data property`() {
         assertFailsWith<IllegalStateException> {
             object : DataTable<SimpleData>("bad_extra_col") {
                 val name = varchar("name", 255)
                 val score = integer("score")
                 val extra = varchar("extra", 255) // no matching property on SimpleData
-            }
+            }.validateMapping()
         }
     }
 
     @Test
-    fun `init fails when data property has no matching column`() {
+    fun `mapping validation fails when data property has no matching column`() {
         assertFailsWith<IllegalStateException> {
             object : DataTable<MissingColData>("bad_missing_col") {
                 val a = varchar("a", 255)
                 // missing column for property 'b'
-            }
+            }.validateMapping()
         }
     }
 

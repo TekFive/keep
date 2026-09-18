@@ -27,7 +27,7 @@ import kotlin.reflect.full.primaryConstructor
 
 /**
  * Abstract base for table classes that automatically map between Exposed table columns and [Data]
- * subclass constructor properties using reflection. Column-to-property matching is by name.
+ * subclass constructor properties. Explicit property references take precedence over table property names.
  *
  * Data class hierarchies are supported. For example:
  * ```
@@ -36,8 +36,7 @@ import kotlin.reflect.full.primaryConstructor
  * ```
  *
  * @param managedColumns Column names managed by framework subclasses (e.g. `id` in [DataTable]),
- *   excluded from Data property mapping and validation. Passed as a constructor parameter to
- *   avoid initialization-order issues with the init validation block.
+ *   excluded from Data property mapping and validation.
  */
 abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     name: String,
@@ -55,20 +54,88 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     @Suppress("UNCHECKED_CAST")
     val dataClass: KClass<D> = resolveDataClass(this.javaClass) as KClass<D>
 
-    init {
-        // Validate that every data Column property on this table has a matching primary
-        // constructor val/var property in D's class hierarchy, and vice versa.
-        // This uses class metadata (names and types), not instance values, so it works during
-        // superclass construction before subclass column properties are initialized.
-        val constructorPropertyNames = collectConstructorPropertyNames(dataClass)
-        val columnPropertyNames = collectColumnPropertyNames(this::class) - managedColumns
-        val columnGroupPropertyNames = collectColumnGroupPropertyNames(this::class)
-        val allTablePropertyNames = columnPropertyNames + columnGroupPropertyNames
+    private class PropertyMapping(
+        val columns: Map<String, Column<*>>,
+        val groups: Map<String, ColumnGroup<*>>,
+        val properties: Map<String, KProperty1<*, *>>,
+    )
 
-        val normalizedConstructorNames = constructorPropertyNames.mapTo(mutableSetOf()) { it.removePrefix("_") }
-        val missingInData = allTablePropertyNames - normalizedConstructorNames
-        val missingInTable = normalizedConstructorNames - allTablePropertyNames
+    // Property references are available only after subclass column initializers have run.
+    private val propertyMapping: PropertyMapping by lazy { buildPropertyMapping() }
 
+    /** Validates the completed table's mapping; also runs automatically on the first read or write. */
+    fun validateMapping() {
+        propertyMapping
+    }
+
+    /** Maps Data property names to columns, using explicit references before legacy name matching. */
+    protected val columnPropertyMap: Map<String, Column<*>>
+        get() = propertyMapping.columns
+
+    protected val columnGroupPropertyMap: Map<String, ColumnGroup<*>>
+        get() = propertyMapping.groups
+
+    private fun buildPropertyMapping(): PropertyMapping {
+        val mappedColumns = linkedMapOf<String, Column<*>>()
+        val mappedGroups = linkedMapOf<String, ColumnGroup<*>>()
+        val explicitProperties = linkedMapOf<String, KProperty1<*, *>>()
+        val managed = mutableSetOf<Column<*>>()
+        val reflectedColumns = mutableListOf<Pair<String, Column<*>>>()
+
+        fun propertyName(property: KProperty1<*, *>): String {
+            val receiver = property.parameters.firstOrNull()?.type?.classifier as? KClass<*>
+            check(receiver != null && receiver.isSuperclassOf(dataClass)) {
+                "Property '$property' does not belong to ${dataClass.simpleName}"
+            }
+            val name = property.name.removePrefix("_")
+            explicitProperties[name] = property
+            return name
+        }
+
+        fun addColumn(name: String, column: Column<*>) {
+            val key = name.removePrefix("_")
+            val previous = mappedColumns.putIfAbsent(key, column)
+            check((previous == null || previous === column) && key !in mappedGroups) {
+                "Multiple columns or column groups map to Data property '$key' on $tableName"
+            }
+        }
+
+        val tablePropertyNames = collectTableMappingPropertyNames()
+        for (prop in this::class.memberProperties) {
+            val classifier = prop.returnType.classifier as? KClass<*> ?: continue
+            // Do not evaluate Table helpers such as autoIncColumn, or unrelated getters like ddl.
+            if (prop.name !in tablePropertyNames) continue
+            if (Column::class.isSuperclassOf(classifier)) {
+                val column = callPropertyGetter(prop) as? Column<*> ?: continue
+                if (prop.name in managedColumns) managed += column
+                else reflectedColumns += prop.name to column
+            } else if (ColumnGroup::class.isSuperclassOf(classifier)) {
+                val group = callPropertyGetter(prop) as? ColumnGroup<*> ?: continue
+                val name = PropertyColumnMappings.groupProperty(group)?.let(::propertyName)
+                    ?: prop.name.removePrefix("_")
+                val previous = mappedGroups.putIfAbsent(name, group)
+                check(previous == null || previous === group) {
+                    "Multiple column groups map to Data property '$name' on $tableName"
+                }
+            }
+        }
+
+        // Include property-bound columns even when registered without a Kotlin table property.
+        for (column in columns) {
+            if (column in managed) continue
+            column.dataProperty?.let { addColumn(propertyName(it), column) }
+        }
+        for ((name, column) in reflectedColumns) {
+            if (column in managed) continue
+            if (column.dataProperty == null) addColumn(name, column)
+        }
+
+        val constructorNames = collectConstructorPropertyNames(dataClass).mapTo(mutableSetOf()) {
+            it.removePrefix("_")
+        }
+        val mappedNames = mappedColumns.keys + mappedGroups.keys
+        val missingInData = mappedNames - constructorNames
+        val missingInTable = constructorNames - mappedNames
         check(missingInData.isEmpty() && missingInTable.isEmpty()) {
             buildString {
                 append("${this@TypedDataTuple::class.simpleName} <-> ${dataClass.simpleName} mapping error: ")
@@ -76,35 +143,25 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
                 if (missingInTable.isNotEmpty()) append("Data properties without matching columns: $missingInTable.")
             }
         }
+        return PropertyMapping(mappedColumns, mappedGroups, explicitProperties)
     }
 
-    /**
-     * Lazy map of Kotlin property name to [Column] instance. Built after construction completes
-     * (so subclass column properties are initialized). Excludes [managedColumns].
-     */
-    protected val columnPropertyMap: Map<String, Column<*>> by lazy {
-        val result = mutableMapOf<String, Column<*>>()
-        for (prop in this::class.memberProperties) {
-            if (prop.name in managedColumns) continue
-            // Filter by return type BEFORE calling the getter to avoid triggering
-            // Exposed internals (e.g. Table.ddl) that require a transaction context.
-            val classifier = prop.returnType.classifier
-            if (classifier !is KClass<*> || !Column::class.isSuperclassOf(classifier)) continue
-            val value = callPropertyGetter(prop) as? Column<*> ?: continue
-            result[prop.name] = value
+    /** Only mapping properties declared below TypedDataTuple, excluding Exposed's own helpers. */
+    private fun collectTableMappingPropertyNames(): Set<String> {
+        val result = mutableSetOf<String>()
+        var current: KClass<*> = this::class
+        while (current != TypedDataTuple::class && current != Any::class) {
+            for (prop in current.declaredMemberProperties) {
+                val classifier = prop.returnType.classifier as? KClass<*>
+                if (classifier != null && (Column::class.isSuperclassOf(classifier) ||
+                        ColumnGroup::class.isSuperclassOf(classifier))) {
+                    result += prop.name
+                }
+            }
+            current = current.supertypes.mapNotNull { it.classifier as? KClass<*> }
+                .firstOrNull { TypedDataTuple::class.isSuperclassOf(it) } ?: break
         }
-        result
-    }
-
-    protected val columnGroupPropertyMap: Map<String, ColumnGroup<*>> by lazy {
-        val result = mutableMapOf<String, ColumnGroup<*>>()
-        for (prop in this::class.memberProperties) {
-            val classifier = prop.returnType.classifier
-            if (classifier !is KClass<*> || !ColumnGroup::class.isSuperclassOf(classifier)) continue
-            val value = callPropertyGetter(prop) as? ColumnGroup<*> ?: continue
-            result[prop.name] = value
-        }
-        result
+        return result
     }
 
     /** Calls the property getter, handling @JvmField properties on objects (static fields with no receiver). */
@@ -136,12 +193,20 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     }
 
     protected val valProperties: Map<String, KProperty1<*, *>> by lazy {
-        collectDataProperties(dataClass, isVar = false)
+        mappedDataProperties(isVar = false)
     }
 
     protected val varProperties: Map<String, KProperty1<*, *>> by lazy {
-        collectDataProperties(dataClass, isVar = true)
+        mappedDataProperties(isVar = true)
     }
+
+    private fun mappedDataProperties(isVar: Boolean): Map<String, KProperty1<*, *>> =
+        collectDataProperties(dataClass, isVar).entries.associate { (name, property) ->
+            val mapped = propertyMapping.properties[name.removePrefix("_")] ?: property
+            // Snapshot and dirty-property keys use the retained getter's name, including when
+            // a public property maps an underscore-prefixed constructor backing property.
+            mapped.name to mapped
+        }
 
     /**
      * Constructs a [Data] instance of type D from a [ResultRow]. Matches each primary constructor
@@ -149,6 +214,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
      * constructor.
      */
     open fun map(row: ResultRow): D {
+        validateMapping()
         val constructor = dataClass.primaryConstructor
             ?: throw IllegalStateException("${dataClass.qualifiedName} must have a primary constructor")
 
@@ -355,47 +421,6 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
                 current = superclass
             }
             throw IllegalStateException("Cannot determine Data class type for ${clazz.name}")
-        }
-
-        /**
-         * Collects Column property names declared in [TypedDataTuple] subclasses, walking from
-         * [klass] up to (but not including) [TypedDataTuple]. This excludes internal Column
-         * properties from [Table] and [TypedDataTuple].
-         */
-        private fun collectColumnPropertyNames(klass: KClass<*>): Set<String> {
-            val result = mutableSetOf<String>()
-            var current: KClass<*> = klass
-            while (current != TypedDataTuple::class && current != Any::class) {
-                for (prop in current.declaredMemberProperties) {
-                    if (prop.returnType.classifier.let { it is KClass<*> && Column::class.isSuperclassOf(it) }) {
-                        result.add(prop.name)
-                    }
-                }
-                current = current.supertypes
-                    .mapNotNull { it.classifier as? KClass<*> }
-                    .firstOrNull { TypedDataTuple::class.isSuperclassOf(it) } ?: break
-            }
-            return result
-        }
-
-        /**
-         * Collects [ColumnGroup] property names declared in [TypedDataTuple] subclasses, walking
-         * from [klass] up to (but not including) [TypedDataTuple].
-         */
-        private fun collectColumnGroupPropertyNames(klass: KClass<*>): Set<String> {
-            val result = mutableSetOf<String>()
-            var current: KClass<*> = klass
-            while (current != TypedDataTuple::class && current != Any::class) {
-                for (prop in current.declaredMemberProperties) {
-                    if (prop.returnType.classifier.let { it is KClass<*> && ColumnGroup::class.isSuperclassOf(it) }) {
-                        result.add(prop.name)
-                    }
-                }
-                current = current.supertypes
-                    .mapNotNull { it.classifier as? KClass<*> }
-                    .firstOrNull { TypedDataTuple::class.isSuperclassOf(it) } ?: break
-            }
-            return result
         }
 
         /**
