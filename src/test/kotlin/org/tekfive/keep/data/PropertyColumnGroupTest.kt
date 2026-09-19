@@ -26,6 +26,29 @@ object PropertyOptionalAddressTable : DataTable<PropertyOptionalAddressData>("pr
 
 class PropertyColumnGroupTest {
     @Test
+    fun `each table exposes only its own group bindings through unmodifiable maps`() {
+        val first = object : DataTable<PropertyAddressData>("same_group_table_name") {}
+        val second = object : DataTable<PropertyAddressData>("same_group_table_name") {}
+        val bindings = first.columnGroupProperties
+        val firstGroup = first.column(PropertyAddressData::address, AddressColumnGroup(first))
+        val secondGroup = second.column(PropertyAddressData::address, AddressColumnGroup(second))
+
+        assertEquals(PropertyAddressData::address, bindings[firstGroup])
+        assertEquals(null, bindings[secondGroup])
+        assertEquals(PropertyAddressData::address, second.columnGroupProperties[secondGroup])
+        assertSame(firstGroup, first.columnGroupPropertyMap["address"])
+        assertSame(secondGroup, second.columnGroupPropertyMap["address"])
+        assertFailsWith<UnsupportedOperationException> { (bindings as MutableMap).clear() }
+        assertFailsWith<UnsupportedOperationException> { (first.columnGroupPropertyMap as MutableMap).clear() }
+
+        val address = Address("123 Main St", "Springfield", State.IL, "62701")
+        val mapper = TestColumnValueMapper()
+        first.mapColumns(PropertyAddressData(address), mapper, insert = true)
+        assertEquals("123 Main St", mapper.values[firstGroup.street])
+        assertSame(firstGroup, first.columnGroupPropertyMap["address"])
+    }
+
+    @Test
     fun `nullable address properties clear every column on inserts and updates`() {
         val data = PropertyOptionalAddressData(null)
         val group = PropertyOptionalAddressTable.addressFields

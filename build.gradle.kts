@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "org.tekfive"
-version = "1.0.20"
+version = "1.0.21"
 
 val jarTempFilePrefix = "${rootProject.name}-jar-"
 

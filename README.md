@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.20")
+implementation("com.github.TekFive:keep:v1.0.21")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -109,6 +109,13 @@ The returned column retains the reference as `column.dataProperty`. In both `Dat
 can have a different name: `val nameColumn = column(Patient::displayName)` maps to `displayName`.
 Mapping validation runs on the first read or write, after table initialization; call
 `validateMapping()` explicitly to check a completed table earlier.
+
+Each `TypedDataTuple` (including `DataTable` and `UuidDataTable`) owns its property mappings.
+The read-only `columnProperties` map exposes explicit property references by SQL column name;
+`columnGroupProperties` exposes them by group instance. To look up columns or groups by Data
+property name, use `columnPropertyMap` or `columnGroupPropertyMap`. These resolved maps include
+legacy name-based declarations and validate the completed table on first access. All four maps
+are unmodifiable.
 
 ```kotlin
 class Patient(

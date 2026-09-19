@@ -66,7 +66,7 @@ fun <D, E, G : ColumnGroup<E>> Table.column(
     require(group.columns.all { it.table === this }) {
         "Column group for '${property.name}' must contain only columns from table '$tableName'"
     }
-    PropertyColumnMappings.bind(group, property)
+    bindGroupProperty(group, property)
     return group
 }
 

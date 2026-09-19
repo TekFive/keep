@@ -15,6 +15,8 @@ import org.tekfive.keep.paged.PagedResult
 import org.tekfive.keep.schema.PostgresSchemaObject
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.TypeVariable
+import java.util.Collections
+import java.util.IdentityHashMap
 import kotlin.reflect.KClass
 import kotlin.reflect.KMutableProperty1
 import kotlin.reflect.jvm.javaField
@@ -46,6 +48,42 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     /** Column-declared objects are collected separately from overridable table schema hooks. */
     internal val columnPostgresObjects = mutableListOf<PostgresSchemaObject>()
 
+    private val mutableColumnProperties = linkedMapOf<String, KProperty1<*, *>>()
+    private val mutableColumnGroupProperties = IdentityHashMap<ColumnGroup<*>, KProperty1<*, *>>()
+
+    /**
+     * Read-only view of explicitly bound properties, keyed by SQL column name on this table.
+     * Names keep the binding valid when Exposed replaces a column through nullable/transform.
+     * Available during table initialization; legacy name-based bindings are in [columnPropertyMap].
+     */
+    val columnProperties: Map<String, KProperty1<*, *>> = Collections.unmodifiableMap(mutableColumnProperties)
+
+    /** Read-only view of explicitly bound group properties on this table, keyed by group identity. */
+    val columnGroupProperties: Map<ColumnGroup<*>, KProperty1<*, *>> =
+        Collections.unmodifiableMap(mutableColumnGroupProperties)
+
+    @Synchronized
+    internal fun bindColumnProperty(column: Column<*>, property: KProperty1<*, *>) {
+        require(column.table === this) { "Column '${column.name}' must belong to table '$tableName'" }
+        val previous = mutableColumnProperties[column.name]
+        require(previous == null || previous == property) {
+            "Column '${column.name}' is already mapped to '${previous?.name}'"
+        }
+        mutableColumnProperties[column.name] = property
+    }
+
+    @Synchronized
+    internal fun bindColumnGroupProperty(group: ColumnGroup<*>, property: KProperty1<*, *>) {
+        require(group.columns.all { it.table === this }) {
+            "Column group for '${property.name}' must contain only columns from table '$tableName'"
+        }
+        val previous = mutableColumnGroupProperties[group]
+        require(previous == null || previous == property) {
+            "Column group is already mapped to '${previous?.name}'"
+        }
+        mutableColumnGroupProperties[group] = property
+    }
+
     abstract val id: Column<ID>
     /**
      * The concrete [KClass] for type parameter D, resolved at runtime via Java generic type
@@ -68,11 +106,15 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         propertyMapping
     }
 
-    /** Maps Data property names to columns, using explicit references before legacy name matching. */
-    protected val columnPropertyMap: Map<String, Column<*>>
+    /**
+     * Read-only map of Data property names to columns, including legacy name-based bindings.
+     * Access after table initialization; accessing this map validates the complete mapping.
+     */
+    val columnPropertyMap: Map<String, Column<*>>
         get() = propertyMapping.columns
 
-    protected val columnGroupPropertyMap: Map<String, ColumnGroup<*>>
+    /** Read-only map of Data property names to groups; validates the mapping on first access. */
+    val columnGroupPropertyMap: Map<String, ColumnGroup<*>>
         get() = propertyMapping.groups
 
     private fun buildPropertyMapping(): PropertyMapping {
@@ -100,6 +142,18 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
             }
         }
 
+        fun addGroup(name: String, group: ColumnGroup<*>) {
+            val key = name.removePrefix("_")
+            val previous = mappedGroups.putIfAbsent(key, group)
+            check((previous == null || previous === group) && key !in mappedColumns) {
+                "Multiple columns or column groups map to Data property '$key' on $tableName"
+            }
+        }
+
+        for ((group, property) in columnGroupProperties) {
+            addGroup(propertyName(property), group)
+        }
+
         val tablePropertyNames = collectTableMappingPropertyNames()
         for (prop in this::class.memberProperties) {
             val classifier = prop.returnType.classifier as? KClass<*> ?: continue
@@ -111,23 +165,20 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
                 else reflectedColumns += prop.name to column
             } else if (ColumnGroup::class.isSuperclassOf(classifier)) {
                 val group = callPropertyGetter(prop) as? ColumnGroup<*> ?: continue
-                val name = PropertyColumnMappings.groupProperty(group)?.let(::propertyName)
+                val name = columnGroupProperties[group]?.let(::propertyName)
                     ?: prop.name.removePrefix("_")
-                val previous = mappedGroups.putIfAbsent(name, group)
-                check(previous == null || previous === group) {
-                    "Multiple column groups map to Data property '$name' on $tableName"
-                }
+                addGroup(name, group)
             }
         }
 
         // Include property-bound columns even when registered without a Kotlin table property.
         for (column in columns) {
             if (column in managed) continue
-            column.dataProperty?.let { addColumn(propertyName(it), column) }
+            columnProperties[column.name]?.let { addColumn(propertyName(it), column) }
         }
         for ((name, column) in reflectedColumns) {
             if (column in managed) continue
-            if (column.dataProperty == null) addColumn(name, column)
+            if (columnProperties[column.name] == null) addColumn(name, column)
         }
 
         val constructorNames = collectConstructorPropertyNames(dataClass).mapTo(mutableSetOf()) {
@@ -143,7 +194,11 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
                 if (missingInTable.isNotEmpty()) append("Data properties without matching columns: $missingInTable.")
             }
         }
-        return PropertyMapping(mappedColumns, mappedGroups, explicitProperties)
+        return PropertyMapping(
+            Collections.unmodifiableMap(mappedColumns),
+            Collections.unmodifiableMap(mappedGroups),
+            Collections.unmodifiableMap(explicitProperties),
+        )
     }
 
     /** Only mapping properties declared below TypedDataTuple, excluding Exposed's own helpers. */

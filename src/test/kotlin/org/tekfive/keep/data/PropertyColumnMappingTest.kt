@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 open class PropertyMappedBaseData(val label: String) : Data()
@@ -27,6 +28,59 @@ object PropertyMappedTable : PropertyMappedBaseTable() {
 }
 
 class PropertyColumnMappingTest {
+    @Test
+    fun `each data table owns its explicit bindings even with the same SQL name`() {
+        val first = object : DataTable<SimpleData>("same_data_table_name") {}
+        val second = object : DataTable<SimpleData>("same_data_table_name") {}
+        val firstColumn = first.column(SimpleData::name, name = "value")
+        val secondColumn = second.column(SimpleData::score, name = "value")
+
+        assertEquals(mapOf("value" to SimpleData::name), first.columnProperties)
+        assertEquals(mapOf("value" to SimpleData::score), second.columnProperties)
+        assertEquals(SimpleData::name, firstColumn.dataProperty)
+        assertEquals(SimpleData::score, secondColumn.dataProperty)
+        assertTrue(first.columnGroupProperties.isEmpty())
+    }
+
+    @Test
+    fun `exposes live unmodifiable bindings and unmodifiable resolved column maps`() {
+        val table = object : DataTable<SimpleData>("read_only_property_bindings") {}
+        val bindings = table.columnProperties
+        val name = table.column(SimpleData::name)
+        val score = table.column(SimpleData::score)
+        assertEquals(mapOf("name" to SimpleData::name, "score" to SimpleData::score), bindings)
+        assertEquals(mapOf("name" to name, "score" to score), table.columnPropertyMap)
+
+        assertFailsWith<UnsupportedOperationException> { (bindings as MutableMap).clear() }
+        assertFailsWith<UnsupportedOperationException> { (table.columnPropertyMap as MutableMap).clear() }
+        assertEquals(SimpleData::name, name.dataProperty)
+        assertSame(name, table.columnPropertyMap["name"])
+    }
+
+    @Test
+    fun `public resolved mappings include renamed and legacy columns`() {
+        assertSame(PropertyMappedTable.labelColumn, PropertyMappedTable.columnPropertyMap["label"])
+        assertSame(PropertyMappedTable.comment, PropertyMappedTable.columnPropertyMap["count"])
+        assertSame(PropertyMappedTable.count, PropertyMappedTable.columnPropertyMap["comment"])
+        assertSame(PropertyMappedTable.active, PropertyMappedTable.columnPropertyMap["active"])
+        assertFalse("active" in PropertyMappedTable.columnProperties)
+        assertFalse("id" in PropertyMappedTable.columnPropertyMap)
+        assertEquals(PropertyMappedBaseData::label, PropertyMappedTable.columnProperties["stored_label"])
+    }
+
+    @Test
+    fun `UUID tables expose the same mappings and preserve nullable column replacements`() {
+        val table = object : UuidDataTable<UuidSimpleData>("uuid_property_bindings") {
+            val nameColumn = column(UuidSimpleData::name).nullable()
+            val scoreColumn = column(UuidSimpleData::score).default(0)
+        }
+        assertEquals(UuidSimpleData::name, table.columnProperties["name"])
+        assertEquals(UuidSimpleData::name, table.nameColumn.dataProperty)
+        assertEquals(UuidSimpleData::score, table.columnProperties["score"])
+        assertSame(table.nameColumn, table.columnPropertyMap["name"])
+        assertSame(table.scoreColumn, table.columnPropertyMap["score"])
+    }
+
     @Test
     fun `maps renamed inherited and JvmField columns using their retained properties`() {
         val data = PropertyMappedData("label", 4, "note", true)

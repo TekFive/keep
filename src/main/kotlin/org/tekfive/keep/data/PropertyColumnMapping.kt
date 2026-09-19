@@ -8,14 +8,28 @@ import kotlin.reflect.KProperty1
 
 /** The Data property explicitly supplied when this column was declared, if any. */
 val Column<*>.dataProperty: KProperty1<*, *>?
-    get() = PropertyColumnMappings.columnProperty(this)
+    get() = when (val owner = table) {
+        is TypedDataTuple<*, *> -> owner.columnProperties[name]
+        else -> PlainTablePropertyMappings.columnProperty(this)
+    }
 
 @PublishedApi
 internal fun <T> Column<T>.withDataProperty(property: KProperty1<*, *>): Column<T> = apply {
-    PropertyColumnMappings.bind(this, property)
+    when (val owner = table) {
+        is TypedDataTuple<*, *> -> owner.bindColumnProperty(this, property)
+        else -> PlainTablePropertyMappings.bind(this, property)
+    }
 }
 
-internal object PropertyColumnMappings {
+internal fun Table.bindGroupProperty(group: ColumnGroup<*>, property: KProperty1<*, *>) {
+    when (this) {
+        is TypedDataTuple<*, *> -> bindColumnGroupProperty(group, property)
+        else -> PlainTablePropertyMappings.bind(group, property)
+    }
+}
+
+/** Fallback for plain Exposed tables, which cannot own KEEP metadata. KEEP tables never use this registry. */
+private object PlainTablePropertyMappings {
     // Use table identity: Exposed considers distinct table instances with the same SQL name equal.
     // Key columns by SQL name so Exposed's nullable/transform copies retain their mapping.
     private val columns = WeakIdentityMap<Table, MutableMap<String, KProperty1<*, *>>>()
@@ -44,9 +58,6 @@ internal object PropertyColumnMappings {
         }
         groups[group] = property
     }
-
-    @Synchronized
-    fun groupProperty(group: ColumnGroup<*>): KProperty1<*, *>? = groups[group]
 }
 
 /** Weak identity keys avoid retaining dynamically created tables or groups in the metadata registry. */
