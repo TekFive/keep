@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.21")
+implementation("com.github.TekFive:keep:v1.0.22")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -192,6 +192,25 @@ Both declarations expose `Column<Instant>` (or `Column<Instant?>`). `BIGINT` sto
 precision; `TIMESTAMP WITH TIME ZONE` uses PostgreSQL's native temporal representation.
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
+
+`Data.table` and `UuidData.table` dynamically resolve the concrete class's companion table:
+
+```kotlin
+class Contact(var displayName: String) : Data() {
+    companion object : DataTable<Contact>("contacts") {
+        val nameColumn = column(Contact::displayName)
+    }
+}
+
+val contact = Contact("Ada")
+check(contact.table === Contact)
+val columnsByProperty = contact.table.columnPropertyMap
+```
+
+For UUID data, use `UuidData` and a companion extending `UuidDataTable<Contact>`.
+Accessing `table` throws `IllegalStateException` if the concrete class has no companion table,
+or if its companion uses the wrong table type or maps a different data class. Separate table
+objects remain supported; their data instances simply cannot use this property.
 
 Unsaved `UuidData` objects return a stable temporary UUID from `id`. Like a temporary negative ID,
 it identifies the instance without marking it as persisted: `idOrNull` remains null, `linkedToDb`
