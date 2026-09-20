@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.22")
+implementation("com.github.TekFive:keep:v1.0.23")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -190,6 +190,8 @@ object AuditRecords : UuidDataTable<AuditRecord>("audit_records") {
 
 Both declarations expose `Column<Instant>` (or `Column<Instant?>`). `BIGINT` storage has millisecond
 precision; `TIMESTAMP WITH TIME ZONE` uses PostgreSQL's native temporal representation.
+To declare an Instant column by name, use `instantColumn("occurred_at", InstantStorage.BIGINT_EPOCH_MILLIS)`
+or select `InstantStorage.TIMESTAMP_WITH_TIME_ZONE` for native timestamp storage.
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
 

@@ -186,7 +186,8 @@ fun <D> Table.column(
     storage: InstantStorage = InstantStorage.BIGINT_EPOCH_MILLIS,
 ): Column<Instant?> = instantColumn(name, storage).nullable().withDataProperty(property)
 
-private fun Table.instantColumn(name: String, storage: InstantStorage): Column<Instant> = when (storage) {
+/** Registers a named [Instant] column using the selected [storage] representation. */
+fun Table.instantColumn(name: String, storage: InstantStorage): Column<Instant> = when (storage) {
     InstantStorage.BIGINT_EPOCH_MILLIS -> long(name).transform(
         wrap = Instant::ofEpochMilli,
         unwrap = Instant::toEpochMilli,
