@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.23")
+implementation("com.github.TekFive:keep:v1.0.24")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -190,10 +190,38 @@ object AuditRecords : UuidDataTable<AuditRecord>("audit_records") {
 
 Both declarations expose `Column<Instant>` (or `Column<Instant?>`). `BIGINT` storage has millisecond
 precision; `TIMESTAMP WITH TIME ZONE` uses PostgreSQL's native temporal representation.
-To declare an Instant column by name, use `instantColumn("occurred_at", InstantStorage.BIGINT_EPOCH_MILLIS)`
-or select `InstantStorage.TIMESTAMP_WITH_TIME_ZONE` for native timestamp storage.
+To declare an Instant column by name, use `instant("occurred_at")`. It defaults to epoch
+milliseconds in `BIGINT`, just like `column(Model::occurredAt)`. Use
+`instant("occurred_at", storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE)` for native timestamp
+storage, and chain `.nullable()` for an optional column.
 
 Common operations include `create`, `save`, `update`, `delete`, `getById`, `findById`, `findByIds`, and `findByUnique`. `Data` instances also expose dirty-property information and JSON serialization helpers.
+
+Import `org.tekfive.keep.data.copy` to shallow-copy a `Data` or `UuidData` instance while
+preserving its concrete type, persisted ID, and dirty-property baseline:
+
+```kotlin
+val edited = patient.copy()
+edited.displayName = "Ada Byron"
+PatientsTable.save(edited)
+```
+
+Saving a linked copy updates the same database row. Its property assignments and change-tracking
+state are independent of the source; referenced objects and collections are shared. Unsaved
+copies remain unsaved, and UUID copies receive their own temporary IDs. Constructor values must
+be available as properties, including inherited constructor properties; other instance fields
+are reinitialized by the constructor.
+
+Import `org.tekfive.keep.db.transaction` to use the Java Instant extension:
+
+```kotlin
+val timestamp = Instant.now().transaction()
+```
+
+Within a KEEP `db` block or Exposed JDBC transaction, this reads PostgreSQL's transaction-start
+timestamp, which remains stable throughout that database transaction. Outside a transaction it
+returns `Instant.now()`. The receiver's value is ignored; each transactional call queries the
+server so commits and rollbacks cannot leave a stale cached timestamp.
 
 `Data.table` and `UuidData.table` dynamically resolve the concrete class's companion table:
 

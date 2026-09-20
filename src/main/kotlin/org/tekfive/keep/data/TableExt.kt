@@ -4,7 +4,10 @@ import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.greater
+import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone as exposedTimestampWithTimeZone
 import org.tekfive.keep.text.citext
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.jvm.JvmName
 import kotlin.reflect.KProperty1
@@ -68,6 +71,26 @@ fun <D> Table.fkey(
     onDelete: ReferenceOption = ReferenceOption.CASCADE,
     name: String = property.standardColumnName(),
 ): Column<UUID?> = fkey(name, target, onDelete).nullable().withDataProperty(property)
+
+/**
+ * Registers an [Instant] column using the same storage as the Instant property [column] overloads.
+ * Defaults to epoch milliseconds in BIGINT; select [InstantStorage.TIMESTAMP_WITH_TIME_ZONE]
+ * for native PostgreSQL timestamp storage.
+ */
+fun Table.instant(
+    name: String,
+    storage: InstantStorage = InstantStorage.BIGINT_EPOCH_MILLIS,
+): Column<Instant> = when (storage) {
+    InstantStorage.BIGINT_EPOCH_MILLIS -> long(name).transform(
+        wrap = Instant::ofEpochMilli,
+        unwrap = Instant::toEpochMilli,
+    )
+
+    InstantStorage.TIMESTAMP_WITH_TIME_ZONE -> exposedTimestampWithTimeZone(name).transform(
+        wrap = { it.toInstant() },
+        unwrap = { it.atOffset(ZoneOffset.UTC) },
+    )
+}
 
 fun Table.timestamp(name: String): Column<Long> {
     return long(name).check("${tableName}_${name}_positive") { it greater 0L }

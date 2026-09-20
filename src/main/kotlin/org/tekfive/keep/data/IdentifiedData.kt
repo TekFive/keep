@@ -89,6 +89,26 @@ abstract class IdentifiedData<ID : Any> : HasId, ToJsonObject {
         }
     }
 
+    /** Reconstructs the runtime class and preserves identity and its independent change-tracking baseline. */
+    internal fun copyInstance(): IdentifiedData<ID> {
+        val constructor = this::class.primaryConstructor
+            ?: throw IllegalStateException("${this::class.qualifiedName} must have a primary constructor to be copied")
+        val properties = constructorProperties(this::class).associateBy { it.name }
+        val arguments = constructor.parameters.associateWith { parameter ->
+            val property = properties[parameter.name]
+                ?: throw IllegalStateException(
+                    "Cannot copy ${this::class.qualifiedName}: constructor parameter '${parameter.name}' " +
+                        "has no matching constructor property",
+                )
+            property.get(this)
+        }
+        return constructor.callBy(arguments).also { copy ->
+            copy.databaseId = databaseId
+            copy.snapshot = snapshot?.toMap()
+            copy.mutableProperties = mutableProperties?.toList()
+        }
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other == null || this::class != other::class) return false
