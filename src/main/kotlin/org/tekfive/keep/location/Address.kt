@@ -1,6 +1,8 @@
 package org.tekfive.keep.location
 
+import org.tekfive.jfk.FromJsonObject
 import org.tekfive.jfk.JsonObject
+import org.tekfive.jfk.ToJsonObject
 import org.tekfive.jfk.toJsonObject
 import org.tekfive.kviash.http.HttpRequestParameters
 import kotlin.contracts.ExperimentalContracts
@@ -15,7 +17,7 @@ data class Address(
     val state: State?,
     @JvmField
     val zip: String?,
-) {
+) : ToJsonObject {
 
     val hasFullAddress: Boolean
         get() = !street.isNullOrBlank() && !city.isNullOrBlank() && state != null && !zip.isNullOrBlank()
@@ -25,18 +27,20 @@ data class Address(
 
     constructor() : this(null, null, null, null)
 
-    fun toJson(): JsonObject = mapOf(
+    override fun toJsonObject(): JsonObject = mapOf(
         "street" to street,
         "city" to city,
         "state" to state?.name,
         "zip" to zip,
     ).toJsonObject()
 
+    fun toJson(): JsonObject = toJsonObject()
+
     fun toJsonString(): String {
         return toJson().toJsonString()
     }
 
-    companion object {
+    companion object : FromJsonObject<Address> {
         operator fun invoke(parameters: HttpRequestParameters): Address {
             val street = parameters["street"]
             val city = parameters["city"]
@@ -45,10 +49,9 @@ data class Address(
             return Address(street, city, state, zip)
         }
 
-        operator fun invoke(json: JsonObject?): Address {
-            if (json == null) {
-                return Address()
-            }
+        operator fun invoke(json: JsonObject?): Address = json?.let(::fromJson) ?: Address()
+
+        override fun fromJson(json: JsonObject): Address {
             val street = json["street"].string
             val city = json["city"].string
             val stateValue = json["state"]

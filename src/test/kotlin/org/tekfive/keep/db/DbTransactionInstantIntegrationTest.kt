@@ -11,7 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class InstantTransactionIntegrationTest {
+class DbTransactionInstantIntegrationTest {
     private lateinit var database: Database
 
     @BeforeTest
@@ -30,30 +30,30 @@ class InstantTransactionIntegrationTest {
     fun `returns the start time even when first called later in a raw Exposed transaction`() = transaction(database) {
         val start = serverTimestamp()
         exec("SELECT pg_sleep(0.02)")
-        assertEquals(start, Instant.EPOCH.transaction())
-        assertEquals(start, Instant.MAX.transaction())
+        assertEquals(start, dbTransactionInstant())
+        assertEquals(start, dbTransactionInstant())
     }
 
     @Test
     fun `KEEP db blocks and nested blocks share the server transaction timestamp`() {
         db(cache = false) {
-            val start = Instant.EPOCH.transaction()
+            val start = dbTransactionInstant()
             db(cache = false) {
-                assertEquals(start, Instant.MIN.transaction())
+                assertEquals(start, dbTransactionInstant())
             }
-            assertEquals(start, Instant.MAX.transaction())
+            assertEquals(start, dbTransactionInstant())
         }
         assertFalse(inDbTransaction())
         val before = Instant.now()
-        assertTrue(Instant.EPOCH.transaction() >= before)
+        assertTrue(dbTransactionInstant() >= before)
     }
 
     @Test
     fun `uses a fresh timestamp after a manual commit in the same Exposed transaction object`() = transaction(database) {
-        val start = Instant.EPOCH.transaction()
+        val start = dbTransactionInstant()
         exec("SELECT pg_sleep(0.02)")
         commit()
-        val next = Instant.EPOCH.transaction()
+        val next = dbTransactionInstant()
         assertTrue(next > start)
         assertEquals(serverTimestamp(), next)
     }
@@ -61,13 +61,13 @@ class InstantTransactionIntegrationTest {
     @Test
     fun `uses a fresh timestamp after rollback`() {
         val first = transaction(database) {
-            val start = Instant.EPOCH.transaction()
+            val start = dbTransactionInstant()
             exec("SELECT pg_sleep(0.02)")
             rollback()
             start
         }
         transaction(database) {
-            val next = Instant.EPOCH.transaction()
+            val next = dbTransactionInstant()
             assertTrue(next > first)
             assertEquals(serverTimestamp(), next)
         }

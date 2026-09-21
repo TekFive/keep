@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.24")
+implementation("com.github.TekFive:keep:v1.0.25")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -160,6 +160,12 @@ The supplied property reference determines the mapping, so the table group's Kot
 For an `Address?` property, use `column(LocationData::address, OptionalAddressColumnGroup(this))`.
 Writing `null` clears all four address columns; reading an all-null row returns an empty `Address`.
 
+`Address` implements JFK `ToJsonObject`, and its companion implements `FromJsonObject<Address>`.
+Use `address.toJsonObject()` and `Address.fromJson(json)`, or store an address as JSONB with
+`column(LocationData::address, Address)`. Serialization writes `street`, `city`, `state` (the state
+abbreviation), and `zip`. Parsing also accepts numeric state IDs and the legacy `zipCode` field.
+Existing `toJson()`, `toJsonString()`, and `Address(json)` calls remain supported.
+
 Scalar `DataEnum` properties use an `_id` suffix by default (`status` becomes `status_id`); an
 explicit `name` is used unchanged.
 
@@ -212,16 +218,18 @@ copies remain unsaved, and UUID copies receive their own temporary IDs. Construc
 be available as properties, including inherited constructor properties; other instance fields
 are reinitialized by the constructor.
 
-Import `org.tekfive.keep.db.transaction` to use the Java Instant extension:
+Use the top-level `dbTransactionInstant()` function to get the current transaction's timestamp:
 
 ```kotlin
-val timestamp = Instant.now().transaction()
+import org.tekfive.keep.db.dbTransactionInstant
+
+val timestamp = dbTransactionInstant()
 ```
 
 Within a KEEP `db` block or Exposed JDBC transaction, this reads PostgreSQL's transaction-start
 timestamp, which remains stable throughout that database transaction. Outside a transaction it
-returns `Instant.now()`. The receiver's value is ignored; each transactional call queries the
-server so commits and rollbacks cannot leave a stale cached timestamp.
+returns `Instant.now()`. Each transactional call queries the server so commits and rollbacks
+cannot leave a stale cached timestamp.
 
 `Data.table` and `UuidData.table` dynamically resolve the concrete class's companion table:
 

@@ -12,10 +12,24 @@ import java.io.Closeable
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Clock
+import java.time.Instant
 
 private const val VALIDATION_TIMEOUT_SECONDS = 5
 
 fun dbTransactionAt(): Long = DbConnection.transactionAt
+
+/**
+ * Returns PostgreSQL's start timestamp for the current transaction, or [Instant.now] outside one.
+ * Works with both KEEP [db] and Exposed JDBC transactions.
+ * Reads the database timestamp on each call so a manual commit or rollback starts a fresh value.
+ */
+fun dbTransactionInstant(): Instant {
+    val transaction = TransactionManager.currentOrNull() ?: return Instant.now()
+    return checkNotNull(transaction.exec("SELECT transaction_timestamp()") { result ->
+        check(result.next()) { "PostgreSQL did not return the transaction timestamp" }
+        result.getTimestamp(1).toInstant()
+    }) { "PostgreSQL did not return the transaction timestamp" }
+}
 
 
 fun dbConnection(): Connection {

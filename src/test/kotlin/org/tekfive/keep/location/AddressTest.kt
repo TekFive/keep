@@ -1,12 +1,69 @@
 package org.tekfive.keep.location
 
+import org.jetbrains.exposed.v1.core.Table
+import org.tekfive.jfk.FromJsonObject
+import org.tekfive.jfk.ToJsonObject
 import org.tekfive.jfk.toJsonObject
+import org.tekfive.keep.data.column
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AddressTest {
+
+    data class Envelope(val address: Address, val addresses: List<Address>) : ToJsonObject {
+        companion object : FromJsonObject<Envelope>
+    }
+
+    @Test
+    fun `implements JFK JSON interfaces while preserving the address JSON format`() {
+        val address = Address("123 Main St", "Springfield", State.IL, "62701")
+        val serializer: ToJsonObject = address
+        val parser: FromJsonObject<Address> = Address
+        val encoded = serializer.toJsonObject()
+
+        assertEquals("IL", encoded["state"].string)
+        assertEquals("62701", encoded["zip"].string)
+        assertEquals(setOf("street", "city", "state", "zip"), encoded.entries.keys)
+        assertEquals(address, parser.fromJson(encoded))
+        assertEquals(address.toJson().toJsonString(), encoded.toJsonString())
+        assertEquals(address.toJsonString(), serializer.toJsonString())
+    }
+
+    @Test
+    fun `JFK deserialization supports legacy state ids and zipCode fields`() {
+        val encoded = mapOf("state" to State.IL.id, "zipCode" to "62701").toJsonObject()
+        val parser: FromJsonObject<Address> = Address
+        assertEquals(Address(null, null, State.IL, "62701"), parser.fromJson(encoded))
+    }
+
+    @Test
+    fun `JFK round trips empty and partial addresses`() {
+        for (address in listOf(Address(), Address(null, "Springfield", null, null))) {
+            assertEquals(address, Address.fromJson(address.toJsonObject()))
+        }
+        assertEquals(Address(), Address(null))
+        assertEquals(Address(), Address.fromJson(emptyMap<String, Any?>().toJsonObject()))
+        assertNull(Address.fromJsonOptional(null))
+    }
+
+    @Test
+    fun `JFK supports nested addresses and address lists`() {
+        val full = Address("123 Main St", "Springfield", State.IL, "62701")
+        val envelope = Envelope(full, listOf(full, Address()))
+        assertEquals(envelope, Envelope.fromJson(envelope.toJsonObject()))
+    }
+
+    @Test
+    fun `address companion works as a JSONB property column converter`() {
+        val table = object : Table("address_json") {}
+        val addressColumn = table.column(Envelope::address, Address)
+        val address = Address("123 Main St", "Springfield", State.IL, "62701")
+        val stored = addressColumn.columnType.notNullValueToDB(address)
+        assertEquals(address, addressColumn.columnType.valueFromDB(stored))
+    }
 
     @Test
     fun `hasFullAddress returns true when all fields are set`() {
