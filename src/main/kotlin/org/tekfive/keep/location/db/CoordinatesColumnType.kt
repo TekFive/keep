@@ -33,7 +33,7 @@ class CoordinatesColumnType : ColumnType<Coordinates>() {
     override fun parameterMarker(value: Coordinates?): String = "?::geography"
 
     companion object {
-        const val Extension = "postgis"
+        const val Extension = org.tekfive.keep.schema.KeepSchema.POSTGIS
 
         private val POINT_REGEX = Regex("""POINT\s*\(\s*([+-]?\d+\.?\d*)\s+([+-]?\d+\.?\d*)\s*\)""", RegexOption.IGNORE_CASE)
 

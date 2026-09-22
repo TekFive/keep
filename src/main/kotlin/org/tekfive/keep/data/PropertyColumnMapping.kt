@@ -61,7 +61,7 @@ private object PlainTablePropertyMappings {
 }
 
 /** Weak identity keys avoid retaining dynamically created tables or groups in the metadata registry. */
-private class WeakIdentityMap<K : Any, V> {
+internal class WeakIdentityMap<K : Any, V> {
     private val queue = ReferenceQueue<K>()
     private val entries = HashMap<Key<K>, V>()
 

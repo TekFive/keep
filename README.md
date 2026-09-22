@@ -345,7 +345,7 @@ Schema helpers also provide common timestamp, active, description, foreign-key, 
 
 ```kotlin
 object ApplicationSchema : KeepSchema("app") {
-    override val extensions = listOf("citext")
+    override val extensions = listOf(KeepSchema.CITEXT)
     override val tables = listOf(UsersTable, OrdersTable)
     override val sequenceDefinitions = listOf(
         PostgresSequenceDefinition(
@@ -369,6 +369,10 @@ PostgresFreshInstallGenerator.generate(
     targetVersion = PostgresTargetVersion(major = 16),
 )
 ```
+
+`KeepSchema` provides extension-name constants: `BTREE_GIN`, `BTREE_GIST`, `CITEXT`, `HSTORE`, `LTREE`,
+`PGCRYPTO`, `PG_STAT_STATEMENTS`, `PG_TRGM`, `POSTGIS`, `TABLEFUNC`, `UNACCENT`, and `UUID_OSSP`.
+For example, use `listOf(KeepSchema.CITEXT, KeepSchema.PG_TRGM)`. Custom extension names remain strings.
 
 `beforeTablesSql` and `afterTablesSql` provide ordered escape hatches for application-specific types, functions, triggers, grants, and other PostgreSQL objects not represented by Exposed tables. Foreign-key targets must all be declared in the same `KeepSchema`, preventing an apparently complete script from silently depending on an undeclared table.
 
@@ -468,7 +472,7 @@ resolved before applying a migration that enables it.
 
 ### PostgreSQL Migration Generation
 
-`PostgresMigrationGenerator` compares a `KeepSchema` with an existing PostgreSQL schema. It produces a reviewable SQL file without applying it to the database.
+`PostgresMigrationGenerator` compares a `KeepSchema` with an existing PostgreSQL schema. It produces a reviewable SQL file without committing schema changes to the database.
 
 ```kotlin
 object ApplicationSchema : KeepSchema("public") {
@@ -501,6 +505,33 @@ With `nonDestructive = true`, KEEP suppresses statements that can remove stored 
 Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`. A view definition includes its defining `SELECT`, and views should be listed in dependency order. Compatible changes use `CREATE OR REPLACE VIEW`, while output-shape changes and materialized-view replacements require destructive mode.
 
 Changing an existing identity column between an integer and UUID is intentionally not generated. That conversion requires an additive, application-specific migration that creates and backfills new primary-key and foreign-key columns before swapping them; KEEP reports this case instead of emitting an invalid PostgreSQL cast.
+
+Declare historical SQL column names with `org.tekfive.keep.data.renamedFrom`:
+
+```kotlin
+val displayName = column(User::displayName)
+    .renamedFrom("name", "full_name", "public_name")
+```
+
+These names are alternatives, not a sequence of migrations. Supply exact database names without
+SQL quoting. If exactly one historical name exists and the current name is absent, KEEP emits
+`ALTER TABLE ... RENAME COLUMN ... TO ...`, preserving the existing data. A database can upgrade
+directly from any listed name. Retain historical names while supporting upgrades from those versions.
+
+If only the current name exists, comparison proceeds normally. If none of the names exists, the
+current column is created normally. Multiple historical columns, or a current column alongside a
+historical column, cause an ambiguity error. Historical names cannot also be current names of
+declared columns or be claimed by multiple columns on the same table. Metadata survives
+`.nullable()` and `.transform()` and is available through the read-only `column.previousNames` list.
+
+When renames are needed, the generator temporarily applies them inside a savepoint, compares the
+remaining schema using the new names, and rolls back before returning—even if planning fails.
+Earlier writes in the caller's transaction are preserved. The generated migration contains the
+renames first, followed by changes to columns, indexes, constraints, and views; no second generation
+pass is needed. Planning requires permission to rename the affected columns and takes PostgreSQL
+table locks until the savepoint is rolled back, subject to configured lock and statement timeouts.
+Renames are allowed with `nonDestructive = true`; type changes and other destructive operations
+still follow the normal safety rules. Fresh installations use only the current names.
 
 ### Migration Runner
 
@@ -801,7 +832,7 @@ val response = PatientsQuery(request.parameters).toJsonObject()
 
 ```kotlin
 object PatientSchema : AppSchema() {
-    override val extensions = listOf(CitextColumnType.Extension)
+    override val extensions = listOf(KeepSchema.CITEXT)
     override val tables = listOf(PatientsTable, JobRecordsTable, LocksTable)
 }
 

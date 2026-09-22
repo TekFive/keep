@@ -41,7 +41,7 @@ class CitextColumnType(val colLength: Int = Int.MAX_VALUE) : ColumnType<String>(
     override fun hashCode(): Int = colLength.hashCode()
 
     companion object {
-        const val Extension = "citext"
+        const val Extension = org.tekfive.keep.schema.KeepSchema.CITEXT
     }
 }
 

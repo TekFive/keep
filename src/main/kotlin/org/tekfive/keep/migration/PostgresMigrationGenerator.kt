@@ -28,8 +28,10 @@ import java.util.UUID
 /**
  * Produces PostgreSQL SQL by comparing a [KeepSchema] with the current database schema.
  *
- * Planning reads PostgreSQL metadata and creates short-lived temporary views to let PostgreSQL
- * canonicalize desired view queries. It never applies any statement in the returned plan.
+ * Planning reads PostgreSQL metadata and creates short-lived temporary objects to canonicalize
+ * types and view queries. Pending column renames are simulated inside a savepoint and rolled back
+ * before returning, including on failure. Simulation takes table locks and requires ALTER privileges.
+ * The returned plan includes renames followed by the remaining changes; none are committed here.
  */
 object PostgresMigrationGenerator {
 
@@ -69,6 +71,19 @@ object PostgresMigrationGenerator {
         val inventory = readInventory(connection, keepSchema.schemaName)
         validateExistingObjectKinds(keepSchema, inventory)
 
+        val renames = resolveColumnRenames(connection, keepSchema.tables)
+        return withSimulatedColumnRenames(connection, renames) {
+            val remaining = planSchema(connection, keepSchema, inventory, nonDestructive)
+            remaining.copy(statements = renames + remaining.statements)
+        }
+    }
+
+    private fun planSchema(
+        connection: Connection,
+        keepSchema: KeepSchema,
+        inventory: List<ExistingObject>,
+        nonDestructive: Boolean,
+    ): PostgresMigrationPlan {
         val candidates = mutableListOf<CandidateStatement>()
         if (!schemaExists(connection, keepSchema.schemaName)) {
             candidates += candidate("CREATE SCHEMA ${quoteIdentifier(keepSchema.schemaName)}")
@@ -172,6 +187,48 @@ object PostgresMigrationGenerator {
         }
 
         return PostgresMigrationPlan(executable.distinct(), suppressed.distinct())
+    }
+
+    private fun <T> withSimulatedColumnRenames(
+        connection: Connection,
+        renames: List<String>,
+        block: () -> T,
+    ): T {
+        if (renames.isEmpty()) return block()
+
+        val metadata = currentDialectMetadata
+        // Keep the caller's earlier writes outside this savepoint. Roll back even after SQL errors,
+        // so a caller that catches a planning failure can safely continue its transaction.
+        val savepoint = connection.setSavepoint()
+        var planningFailure: Throwable? = null
+        try {
+            connection.createStatement().use { statement -> renames.forEach { statement.execute(it) } }
+            metadata.resetCaches()
+            return block()
+        } catch (failure: Throwable) {
+            planningFailure = failure
+            throw failure
+        } finally {
+            try {
+                try {
+                    connection.rollback(savepoint)
+                } catch (rollbackFailure: Throwable) {
+                    // Never leave a connection usable for committing simulated renames if restoration fails.
+                    try {
+                        connection.close()
+                    } catch (closeFailure: Throwable) {
+                        rollbackFailure.addSuppressed(closeFailure)
+                    }
+                    throw rollbackFailure
+                }
+                connection.releaseSavepoint(savepoint)
+            } catch (cleanupFailure: Throwable) {
+                if (planningFailure == null) throw cleanupFailure
+                planningFailure.addSuppressed(cleanupFailure)
+            } finally {
+                metadata.resetCaches()
+            }
+        }
     }
 
     private fun postgresColumnTypeStatements(

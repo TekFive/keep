@@ -84,7 +84,7 @@ private object FreshHookTable : DataTable<FreshHookData>("fresh_hook_table") {
 }
 
 private object FreshHookSchema : AppSchema() {
-    override val extensions = listOf("citext")
+    override val extensions = listOf(KeepSchema.CITEXT)
     override val tables = listOf(FreshHookTable)
 }
 

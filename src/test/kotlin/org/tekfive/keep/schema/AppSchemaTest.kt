@@ -35,7 +35,7 @@ private object CitextTable : Table("citext_schema_test") {
 }
 
 private object ExtSchema : AppSchema() {
-    override val extensions = listOf("citext")
+    override val extensions = listOf(KeepSchema.CITEXT)
     override val tables = listOf(CitextTable)
 }
 

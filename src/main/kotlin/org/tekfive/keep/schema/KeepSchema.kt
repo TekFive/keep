@@ -16,7 +16,7 @@ abstract class KeepSchema(
 ) {
     abstract val tables: List<Table>
 
-    /** PostgreSQL extensions required before types and tables are created. */
+    /** PostgreSQL extensions required before types and tables are created, e.g. [CITEXT] or [POSTGIS]. */
     open val extensions: List<String> = emptyList()
 
     open val views: List<PostgresViewDefinition> = emptyList()
@@ -45,4 +45,20 @@ abstract class KeepSchema(
         get() = postgresObjects +
             tables.filterIsInstance<DataTableSchemaHooks>().flatMap { it.postgresObjects } +
             tables.filterIsInstance<TypedDataTuple<*, *>>().flatMap { it.columnPostgresObjects }
+
+    /** Well-known extension names for [extensions]; custom names can also be supplied. */
+    companion object {
+        const val BTREE_GIN = "btree_gin"
+        const val BTREE_GIST = "btree_gist"
+        const val CITEXT = "citext"
+        const val HSTORE = "hstore"
+        const val LTREE = "ltree"
+        const val PGCRYPTO = "pgcrypto"
+        const val PG_STAT_STATEMENTS = "pg_stat_statements"
+        const val PG_TRGM = "pg_trgm"
+        const val POSTGIS = "postgis"
+        const val TABLEFUNC = "tablefunc"
+        const val UNACCENT = "unaccent"
+        const val UUID_OSSP = "uuid-ossp"
+    }
 }

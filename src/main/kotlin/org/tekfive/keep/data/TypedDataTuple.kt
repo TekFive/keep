@@ -48,6 +48,8 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     /** Column-declared objects are collected separately from overridable table schema hooks. */
     internal val columnPostgresObjects = mutableListOf<PostgresSchemaObject>()
 
+    internal val columnPreviousNames = linkedMapOf<String, List<String>>()
+
     private val mutableColumnProperties = linkedMapOf<String, KProperty1<*, *>>()
     private val mutableColumnGroupProperties = IdentityHashMap<ColumnGroup<*>, KProperty1<*, *>>()
 
