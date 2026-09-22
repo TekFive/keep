@@ -1,4 +1,4 @@
-package org.tekfive.keep.migration
+package org.tekfive.keep.migration.dynamic
 
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -32,7 +32,7 @@ class ColumnRenameResolverTest {
     fun `each historical name resolves directly to the current name`(): Unit = transaction {
         for (previous in listOf("name", "full_name", "public_name")) {
             exec("CREATE TABLE rename_resolver.records ($previous TEXT)")
-            val sql = resolveColumnRenames(dbConnection(), listOf(table)).single()
+            val sql = resolveColumnRenames(dbConnection(), listOf(table)).single().toSql()
             assertTrue(sql.contains("RENAME COLUMN \"$previous\" TO \"label\""), sql)
             exec("DROP TABLE rename_resolver.records")
         }
@@ -75,7 +75,7 @@ class ColumnRenameResolverTest {
             val label = text("label").renamedFrom("Old \"Name", "Name")
         }
         exec("CREATE TABLE rename_resolver.records (\"Old \"\"Name\" TEXT, name TEXT)")
-        val sql = resolveColumnRenames(dbConnection(), listOf(quoted)).single()
+        val sql = resolveColumnRenames(dbConnection(), listOf(quoted)).single().toSql()
         assertTrue(sql.contains("RENAME COLUMN \"Old \"\"Name\" TO \"label\""), sql)
         exec(sql)
         assertEquals(emptyList(), resolveColumnRenames(dbConnection(), listOf(quoted)))

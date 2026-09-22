@@ -55,6 +55,41 @@ class DynamicMigrationTest {
         transaction(database) { assertEquals(123L, exec("SELECT value FROM $SCHEMA.records") { it.next(); it.getLong(1) }) }
     }
 
+    @Test fun `non-destructive removal retains column data and allows inserts to omit removed columns`() {
+        val records = object : Table("$SCHEMA.records") {
+            val id = integer("id")
+            val required = text("required")
+            override val primaryKey = PrimaryKey(id)
+        }
+        val schema = object : KeepSchema(SCHEMA) { override val tables = listOf(records) }
+        transaction(database) {
+            exec("""CREATE TABLE $SCHEMA.records (id INTEGER PRIMARY KEY, required TEXT NOT NULL, "old label" TEXT NOT NULL, optional TEXT)""")
+            exec("""INSERT INTO $SCHEMA.records VALUES (1, 'required', 'preserved', 'optional')""")
+        }
+
+        val destructive = PostgresMigrationGenerator.plan(database, schema, false)
+        assertEquals(2, destructive.statements.filterIsInstance<DropColumn>().size)
+        assertTrue(destructive.statements.none { it is DropNotNull })
+
+        val plan = PostgresMigrationGenerator.plan(database, schema, true)
+        assertEquals(listOf(DropNotNull(table, "old label")), plan.statements)
+        assertEquals(setOf("old label", "optional"), plan.suppressedStatements.map {
+            assertIs<DropColumn>(it.statement).column
+        }.toSet())
+        assertEquals(1, plan.execute(database))
+        transaction(database) {
+            exec("INSERT INTO $SCHEMA.records (id, required) VALUES (2, 'new')")
+            assertEquals("preserved", exec("""SELECT "old label" FROM $SCHEMA.records WHERE id = 1""") { it.next(); it.getString(1) })
+            assertTrue(exec("""SELECT "old label" IS NULL FROM $SCHEMA.records WHERE id = 2""") { it.next(); it.getBoolean(1) } == true)
+            assertEquals(2, exec("SELECT count(*) FROM information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = 'records' AND is_nullable = 'NO'") { it.next(); it.getInt(1) })
+        }
+        val repeated = PostgresMigrationGenerator.plan(database, schema, true)
+        assertTrue(repeated.statements.isEmpty())
+        assertEquals(plan.suppressedStatements, repeated.suppressedStatements)
+        assertEquals(2, PostgresMigrationGenerator.plan(database, schema, false).execute(database))
+        assertTrue(PostgresMigrationGenerator.plan(database, schema, false).isEmpty)
+    }
+
     @Test fun `manual plan renders and executes columns constraints expressions views and trigger functions`() {
         val function = QualifiedName("adjust_value", SCHEMA)
         val plan = PostgresMigrationPlan(listOf(

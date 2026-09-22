@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.26")
+implementation("com.github.TekFive:keep:v1.0.27")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -544,12 +544,17 @@ versions before running any statements.
 Dynamic execution does not record migration versions or acquire the versioned runner's advisory
 lock. Use `MigrationRunner` with an application-owned `Migration` when version tracking is needed;
 its `apply` method can call a transactional plan's `execute()`. Concurrent schema changes still need
-application-level coordination. The former generator in `org.tekfive.keep.migration` remains as a
-deprecated compatibility facade returning rendered SQL plans.
+application-level coordination.
+
+The former generator and raw-SQL plan in `org.tekfive.keep.migration` have been removed. Update
+imports to `org.tekfive.keep.migration.dynamic`; use `plan.statements` for typed operations or
+`plan.sqlStatements` for rendered SQL strings.
 
 `KeepSchema` is authoritative for its PostgreSQL schema. Destructive mode can remove ordinary tables, views, materialized views, standalone sequences, and columns not declared by it. PostgreSQL-owned sequences for serial and identity columns remain managed by their tables.
 
 With `nonDestructive = true`, KEEP suppresses statements that can remove stored data or schema objects, including table, column, view, materialized-view, and sequence drops as well as column type rewrites, `DELETE`, and `TRUNCATE`. Non-data-removing changes remain available, including adding objects, dropping indexes or constraints, and relaxing a column with `DROP NOT NULL`. Suppressed statements are returned separately and are not written into the executable SQL file.
+
+When a column is removed from a declared table, a non-destructive plan retains the database column and its existing values, but removes its `NOT NULL` constraint so new inserts can omit it. Already-nullable columns require no change. PostgreSQL restrictions still apply to columns whose nullability is required by a primary key or identity; those need an explicit migration of the dependent definition.
 
 Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`. A view definition includes its defining `SELECT`, and views should be listed in dependency order. Compatible changes use `CREATE OR REPLACE VIEW`, while output-shape changes and materialized-view replacements require destructive mode.
 

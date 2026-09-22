@@ -10,7 +10,7 @@ import org.tekfive.keep.data.UuidData
 import org.tekfive.keep.data.UuidDataTable
 import org.tekfive.keep.data.column
 import org.tekfive.keep.data.uniqueNonNullUniqueIndex
-import org.tekfive.keep.migration.PostgresMigrationGenerator
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import java.sql.SQLException
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -113,9 +113,9 @@ class ColumnNullsNotDistinctIntegrationTest {
         }
         val schema = columnNullsSchema()
         val plan = PostgresMigrationGenerator.plan(database, schema, true)
-        assertTrue(plan.statements.any { it.contains("DROP CONSTRAINT \"articles_url_uq\"") })
-        assertTrue(plan.statements.any { it.contains("ADD CONSTRAINT \"articles_url_uq\" UNIQUE NULLS NOT DISTINCT") })
-        transaction(database) { plan.statements.forEach { exec(it) } }
+        assertTrue(plan.sqlStatements.any { it.contains("DROP CONSTRAINT \"articles_url_uq\"") })
+        assertTrue(plan.sqlStatements.any { it.contains("ADD CONSTRAINT \"articles_url_uq\" UNIQUE NULLS NOT DISTINCT") })
+        transaction(database) { plan.execute() }
         val second = PostgresMigrationGenerator.plan(database, schema, true)
         assertTrue(second.isEmpty, second.toString())
     }

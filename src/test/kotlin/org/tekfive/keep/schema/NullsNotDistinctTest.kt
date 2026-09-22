@@ -5,7 +5,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.Data
 import org.tekfive.keep.data.DataTable
 import org.tekfive.keep.data.TestDatabase
-import org.tekfive.keep.migration.PostgresMigrationGenerator
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import java.sql.SQLException
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -127,10 +127,10 @@ class NullsNotDistinctIntegrationTest {
         for (distinct in listOf(true, false)) {
             val schema = nullsSchema(distinct)
             val migration = PostgresMigrationGenerator.plan(database, schema, nonDestructive = true)
-            assertTrue(migration.statements.any { it.contains("DROP CONSTRAINT \"entries_key\"") })
-            val add = migration.statements.single { it.contains("ADD CONSTRAINT \"entries_key\"") }
+            assertTrue(migration.sqlStatements.any { it.contains("DROP CONSTRAINT \"entries_key\"") })
+            val add = migration.sqlStatements.single { it.contains("ADD CONSTRAINT \"entries_key\"") }
             assertEquals(distinct, add.contains("NULLS NOT DISTINCT"))
-            transaction(database) { migration.statements.forEach { exec(it) } }
+            transaction(database) { migration.execute() }
             PostgresMigrationGenerator.plan(database, schema, true).let {
                 assertTrue(it.isEmpty, it.toString())
             }

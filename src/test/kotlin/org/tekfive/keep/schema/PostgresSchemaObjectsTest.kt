@@ -14,7 +14,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.DataEnum
 import org.tekfive.keep.data.TestDatabase
 import org.tekfive.keep.data.dataEnum
-import org.tekfive.keep.migration.PostgresMigrationGenerator
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import java.sql.SQLException
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -166,16 +166,16 @@ class PostgresSchemaObjectsIntegrationTest {
         transaction(database) { exec("CREATE SCHEMA $POLICY_SCHEMA") }
 
         val migration = PostgresMigrationGenerator.plan(database, PolicySchema, nonDestructive = true)
-        val tableIndex = migration.statements.indexOfFirst { it.startsWith("CREATE TABLE") }
-        val constraintIndex = migration.statements.indexOfFirst { it.contains("ADD CONSTRAINT") }
-        val functionIndex = migration.statements.indexOfFirst { it.startsWith("CREATE OR REPLACE FUNCTION") }
-        val triggerIndex = migration.statements.indexOfFirst { it.startsWith("CREATE TRIGGER") }
+        val tableIndex = migration.sqlStatements.indexOfFirst { it.startsWith("CREATE TABLE") }
+        val constraintIndex = migration.sqlStatements.indexOfFirst { it.contains("ADD CONSTRAINT") }
+        val functionIndex = migration.sqlStatements.indexOfFirst { it.startsWith("CREATE OR REPLACE FUNCTION") }
+        val triggerIndex = migration.sqlStatements.indexOfFirst { it.startsWith("CREATE TRIGGER") }
 
         assertTrue(tableIndex < constraintIndex)
         assertTrue(constraintIndex < functionIndex)
         assertTrue(functionIndex < triggerIndex)
 
-        transaction(database) { migration.statements.forEach { exec(it) } }
+        transaction(database) { migration.execute() }
         assertTrue(PostgresMigrationGenerator.plan(database, PolicySchema, true).isEmpty)
     }
 
@@ -220,7 +220,7 @@ class PostgresSchemaObjectsIntegrationTest {
         }
 
         val merge = PostgresMigrationGenerator.plan(database, PolicySchema, nonDestructive = false)
-        assertEquals(emptyList(), merge.statements, "Typed PostgreSQL objects were not idempotent: $merge")
+        assertEquals(emptyList(), merge.sqlStatements, "Typed PostgreSQL objects were not idempotent: $merge")
     }
 
     @Test
@@ -262,13 +262,13 @@ class PostgresSchemaObjectsIntegrationTest {
         }
 
         val migration = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = true)
-        assertTrue(migration.statements.any { it.contains("DROP CONSTRAINT") })
-        assertTrue(migration.statements.any { it.contains("ADD CONSTRAINT") })
-        assertTrue(migration.statements.any { it.startsWith("CREATE OR REPLACE FUNCTION") })
-        assertTrue(migration.statements.any { it.startsWith("DROP TRIGGER") })
-        assertTrue(migration.statements.any { it.startsWith("CREATE TRIGGER") && it.contains(" AFTER ") })
+        assertTrue(migration.sqlStatements.any { it.contains("DROP CONSTRAINT") })
+        assertTrue(migration.sqlStatements.any { it.contains("ADD CONSTRAINT") })
+        assertTrue(migration.sqlStatements.any { it.startsWith("CREATE OR REPLACE FUNCTION") })
+        assertTrue(migration.sqlStatements.any { it.startsWith("DROP TRIGGER") })
+        assertTrue(migration.sqlStatements.any { it.startsWith("CREATE TRIGGER") && it.contains(" AFTER ") })
 
-        transaction(database) { migration.statements.forEach { exec(it) } }
+        transaction(database) { migration.execute() }
 
         val second = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = true)
         assertTrue(second.isEmpty, "Changed PostgreSQL objects were not idempotent: $second")

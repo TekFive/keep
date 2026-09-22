@@ -172,6 +172,14 @@ object PostgresMigrationGenerator {
             candidates += candidate(DropSequence(QualifiedName(name, keepSchema.schemaName)))
         }
 
+        if (nonDestructive) {
+            // Retained, unmapped columns must allow inserts that only supply declared columns.
+            val removedColumns = candidates.map { it.statement }.filterIsInstance<DropColumn>()
+            retainedColumnNullabilityStatements(connection, removedColumns).forEach {
+                candidates += candidate(it)
+            }
+        }
+
         val executable = mutableListOf<PostgresMigrationStatement>()
         val suppressed = mutableListOf<SuppressedPostgresMigrationStatement>()
         candidates.forEach { planned ->
@@ -185,6 +193,28 @@ object PostgresMigrationGenerator {
         }
 
         return PostgresMigrationPlan(executable.distinct(), suppressed.distinct())
+    }
+
+    private fun retainedColumnNullabilityStatements(
+        connection: Connection,
+        removedColumns: List<DropColumn>,
+    ): List<DropNotNull> = buildList {
+        removedColumns.groupBy { it.table }.forEach { (table, columns) ->
+            val requiredColumns = connection.prepareStatement(
+                """
+                SELECT attname FROM pg_attribute
+                WHERE attrelid = ?::regclass AND attnum > 0 AND NOT attisdropped AND attnotnull
+                """.trimIndent()
+            ).use { statement ->
+                statement.setString(1, table.toSql())
+                statement.executeQuery().use { result ->
+                    buildSet { while (result.next()) add(result.getString(1)) }
+                }
+            }
+            columns.filter { it.column in requiredColumns }.forEach {
+                add(DropNotNull(table, it.column))
+            }
+        }
     }
 
     private fun <T> withSimulatedColumnRenames(

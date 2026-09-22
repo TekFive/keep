@@ -1,4 +1,4 @@
-package org.tekfive.keep.migration
+package org.tekfive.keep.migration.dynamic
 
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.jdbc.Database
@@ -55,8 +55,8 @@ class PostgresColumnRenameTest {
                 exec("INSERT INTO $RENAME_SCHEMA.users VALUES (1, 'Ada')")
             }
             val first = PostgresMigrationGenerator.plan(database, schema, nonDestructive = true)
-            assertEquals(1, first.statements.size)
-            assertTrue(first.statements.single().contains("RENAME COLUMN \"$previous\" TO \"display_name\""))
+            assertEquals(1, first.sqlStatements.size)
+            assertTrue(first.sqlStatements.single().contains("RENAME COLUMN \"$previous\" TO \"display_name\""))
             assertTrue(first.suppressedStatements.isEmpty())
             transaction(database) {
                 assertEquals("Ada", exec("SELECT $previous FROM $RENAME_SCHEMA.users") { result ->
@@ -89,7 +89,7 @@ class PostgresColumnRenameTest {
         assertTrue(PostgresMigrationGenerator.plan(database, schema, true).isEmpty)
         transaction(database) { exec("ALTER TABLE $RENAME_SCHEMA.users DROP COLUMN display_name") }
         val missing = PostgresMigrationGenerator.plan(database, schema, nonDestructive = true)
-        assertTrue(missing.statements.any { it.contains("ADD") && it.contains("display_name") })
+        assertTrue(missing.sqlStatements.any { it.contains("ADD") && it.contains("display_name") })
         apply(missing)
         assertTrue(PostgresMigrationGenerator.plan(database, schema, true).isEmpty)
     }
@@ -106,10 +106,10 @@ class PostgresColumnRenameTest {
         }
         val safe = PostgresMigrationGenerator.plan(database, desired, nonDestructive = true)
         assertTrue(safe.suppressedStatements.any { it.reason == DestructivePostgresMigrationChange.ALTER_COLUMN_TYPE })
-        assertTrue(safe.statements.first().contains("RENAME COLUMN"))
+        assertTrue(safe.sqlStatements.first().contains("RENAME COLUMN"))
         val complete = PostgresMigrationGenerator.plan(database, desired, nonDestructive = false)
-        assertTrue(complete.statements.first().contains("RENAME COLUMN"))
-        assertTrue(complete.statements.drop(1).any { it.contains(" TYPE ") })
+        assertTrue(complete.sqlStatements.first().contains("RENAME COLUMN"))
+        assertTrue(complete.sqlStatements.drop(1).any { it.contains(" TYPE ") })
         apply(complete)
         assertTrue(PostgresMigrationGenerator.plan(database, desired, false).isEmpty)
         transaction(database) {
@@ -143,7 +143,7 @@ class PostgresColumnRenameTest {
             exec("INSERT INTO $RENAME_SCHEMA.children VALUES (1)")
         }
         val first = PostgresMigrationGenerator.plan(database, desired, nonDestructive = true)
-        assertTrue(first.statements.first().contains("RENAME COLUMN"))
+        assertTrue(first.sqlStatements.first().contains("RENAME COLUMN"))
         assertTrue(first.suppressedStatements.isEmpty(), first.toString())
         apply(first)
         assertTrue(PostgresMigrationGenerator.plan(database, desired, true).isEmpty)
@@ -202,9 +202,9 @@ class PostgresColumnRenameTest {
             exec("INSERT INTO $RENAME_SCHEMA.users VALUES (1, 'Ada'), (-1, 'Hidden')")
         }
         val plan = PostgresMigrationGenerator.plan(database, desired, nonDestructive = true)
-        assertTrue(plan.statements.first().contains("RENAME COLUMN"))
-        assertTrue(plan.statements.any { it.startsWith("CREATE OR REPLACE VIEW") }, plan.toSql())
-        assertFalse(plan.statements.any { it.contains("INDEX") }, plan.toSql())
+        assertTrue(plan.sqlStatements.first().contains("RENAME COLUMN"))
+        assertTrue(plan.sqlStatements.any { it.startsWith("CREATE OR REPLACE VIEW") }, plan.toSql())
+        assertFalse(plan.sqlStatements.any { it.contains("INDEX") }, plan.toSql())
         transaction(database) { exec("SELECT name FROM $RENAME_SCHEMA.users") { } }
         apply(plan)
         assertTrue(PostgresMigrationGenerator.plan(database, desired, true).isEmpty)
@@ -236,7 +236,7 @@ class PostgresColumnRenameTest {
             val valid = schema(users, views = listOf(
                 PostgresViewDefinition("labels", "SELECT display_name AS label FROM $RENAME_SCHEMA.users"),
             ))
-            assertTrue(PostgresMigrationGenerator.plan(valid, true).statements.first().contains("RENAME COLUMN"))
+            assertTrue(PostgresMigrationGenerator.plan(valid, true).sqlStatements.first().contains("RENAME COLUMN"))
         }
         transaction(database) {
             assertEquals(listOf("Before", "After"), exec("SELECT name FROM $RENAME_SCHEMA.users ORDER BY id") { result ->
@@ -271,7 +271,7 @@ class PostgresColumnRenameTest {
     }
 
     private fun apply(plan: PostgresMigrationPlan) {
-        transaction(database) { plan.statements.forEach { exec(it) } }
+        transaction(database) { plan.execute() }
     }
 
     private fun schema(vararg tables: Table, views: List<PostgresViewDefinition> = emptyList()) =

@@ -1,4 +1,4 @@
-package org.tekfive.keep.migration
+package org.tekfive.keep.migration.dynamic
 
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.java.javaUUID
@@ -89,19 +89,19 @@ class PostgresMigrationGeneratorTest {
         val plan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = true)
 
         assertTrue(plan.suppressedStatements.isEmpty())
-        assertTrue(plan.statements.any { it.startsWith("CREATE TABLE") && it.contains("widgets") })
+        assertTrue(plan.sqlStatements.any { it.startsWith("CREATE TABLE") && it.contains("widgets") })
         assertContains(
-            plan.statements,
+            plan.sqlStatements,
             "CREATE SEQUENCE \"$GENERATOR_SCHEMA\".\"widget_number_seq\"",
         )
-        assertTrue(plan.statements.any { it.startsWith("CREATE VIEW") && it.contains("widget_view") })
+        assertTrue(plan.sqlStatements.any { it.startsWith("CREATE VIEW") && it.contains("widget_view") })
 
         transaction(database) {
-            plan.statements.forEach { exec(it) }
+            plan.execute()
         }
 
         val secondPlan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = true)
-        assertEquals(emptyList(), secondPlan.statements)
+        assertEquals(emptyList(), secondPlan.sqlStatements)
         assertEquals(emptyList(), secondPlan.suppressedStatements)
     }
 
@@ -113,9 +113,9 @@ class PostgresMigrationGeneratorTest {
 
         val plan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = true)
 
-        assertEquals("CREATE SCHEMA \"$GENERATOR_SCHEMA\"", plan.statements.first())
+        assertEquals("CREATE SCHEMA \"$GENERATOR_SCHEMA\"", plan.sqlStatements.first())
         transaction(database) {
-            plan.statements.forEach { exec(it) }
+            plan.execute()
         }
         val secondPlan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = true)
         assertTrue(secondPlan.isEmpty)
@@ -137,12 +137,12 @@ class PostgresMigrationGeneratorTest {
         )
 
         val plan = PostgresMigrationGenerator.plan(database, viewSchema, nonDestructive = true)
-        val viewStatements = plan.statements.filter { it.startsWith("CREATE VIEW") }
+        val viewStatements = plan.sqlStatements.filter { it.startsWith("CREATE VIEW") }
         assertTrue(viewStatements[0].contains("base_widgets"))
         assertTrue(viewStatements[1].contains("dependent_widgets"))
 
         transaction(database) {
-            plan.statements.forEach { exec(it) }
+            plan.execute()
         }
         assertTrue(PostgresMigrationGenerator.plan(database, viewSchema, true).isEmpty)
     }
@@ -166,17 +166,17 @@ class PostgresMigrationGeneratorTest {
 
         val plan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = true)
 
-        assertTrue(plan.statements.any { it.contains("DROP NOT NULL", ignoreCase = true) })
-        assertFalse(plan.statements.any { it.contains("DROP COLUMN", ignoreCase = true) })
-        assertFalse(plan.statements.any { it.startsWith("DROP TABLE", ignoreCase = true) })
-        assertFalse(plan.statements.any { it.startsWith("DROP VIEW", ignoreCase = true) })
-        assertFalse(plan.statements.any { it.startsWith("DROP SEQUENCE", ignoreCase = true) })
+        assertTrue(plan.sqlStatements.any { it.contains("DROP NOT NULL", ignoreCase = true) })
+        assertFalse(plan.sqlStatements.any { it.contains("DROP COLUMN", ignoreCase = true) })
+        assertFalse(plan.sqlStatements.any { it.startsWith("DROP TABLE", ignoreCase = true) })
+        assertFalse(plan.sqlStatements.any { it.startsWith("DROP VIEW", ignoreCase = true) })
+        assertFalse(plan.sqlStatements.any { it.startsWith("DROP SEQUENCE", ignoreCase = true) })
 
         val suppressedReasons = plan.suppressedStatements.map { it.reason }.toSet()
         assertContains(suppressedReasons, DestructivePostgresMigrationChange.DROP_COLUMN)
         assertTrue(
             DestructivePostgresMigrationChange.ALTER_COLUMN_TYPE in suppressedReasons,
-            "Expected a suppressed type rewrite; statements=${plan.statements}, suppressed=${plan.suppressedStatements}",
+            "Expected a suppressed type rewrite; statements=${plan.sqlStatements}, suppressed=${plan.suppressedStatements}",
         )
         assertContains(suppressedReasons, DestructivePostgresMigrationChange.DROP_TABLE)
         assertContains(suppressedReasons, DestructivePostgresMigrationChange.DROP_VIEW)
@@ -194,12 +194,12 @@ class PostgresMigrationGeneratorTest {
         val plan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = false)
 
         assertTrue(plan.suppressedStatements.isEmpty())
-        assertTrue(plan.statements.any { it.contains("DROP COLUMN", ignoreCase = true) })
-        assertTrue(plan.statements.any { it.startsWith("DROP TABLE", ignoreCase = true) })
-        assertTrue(plan.statements.any { it.startsWith("DROP SEQUENCE", ignoreCase = true) })
+        assertTrue(plan.sqlStatements.any { it.contains("DROP COLUMN", ignoreCase = true) })
+        assertTrue(plan.sqlStatements.any { it.startsWith("DROP TABLE", ignoreCase = true) })
+        assertTrue(plan.sqlStatements.any { it.startsWith("DROP SEQUENCE", ignoreCase = true) })
 
         transaction(database) {
-            plan.statements.forEach { exec(it) }
+            plan.execute()
         }
         val secondPlan = PostgresMigrationGenerator.plan(database, keepSchema, nonDestructive = false)
         assertTrue(secondPlan.isEmpty, "Expected an empty plan after applying generated SQL: $secondPlan")
@@ -229,7 +229,7 @@ class PostgresMigrationGeneratorTest {
         val nativeSchema = MigrationTestSchema(GENERATOR_SCHEMA, listOf(GeneratorNativeInstants))
 
         val safePlan = PostgresMigrationGenerator.plan(database, nativeSchema, nonDestructive = true)
-        assertTrue(safePlan.statements.isEmpty())
+        assertTrue(safePlan.sqlStatements.isEmpty())
         assertTrue(safePlan.suppressedStatements.single().sql.contains("to_timestamp"))
         assertEquals(
             DestructivePostgresMigrationChange.ALTER_COLUMN_TYPE,
@@ -237,9 +237,9 @@ class PostgresMigrationGeneratorTest {
         )
 
         val nativePlan = PostgresMigrationGenerator.plan(database, nativeSchema, nonDestructive = false)
-        assertTrue(nativePlan.statements.single().contains("to_timestamp"))
+        assertTrue(nativePlan.sqlStatements.single().contains("to_timestamp"))
         transaction(database) {
-            nativePlan.statements.forEach { exec(it) }
+            nativePlan.execute()
             exec(
                 "SELECT occurred_at = to_timestamp($epochMillis / 1000.0) " +
                     "FROM $GENERATOR_SCHEMA.instant_events"
@@ -251,9 +251,9 @@ class PostgresMigrationGeneratorTest {
 
         val bigintSchema = MigrationTestSchema(GENERATOR_SCHEMA, listOf(GeneratorBigintInstants))
         val bigintPlan = PostgresMigrationGenerator.plan(database, bigintSchema, nonDestructive = false)
-        assertTrue(bigintPlan.statements.single().contains("extract(epoch"))
+        assertTrue(bigintPlan.sqlStatements.single().contains("extract(epoch"))
         transaction(database) {
-            bigintPlan.statements.forEach { exec(it) }
+            bigintPlan.execute()
             exec("SELECT occurred_at FROM $GENERATOR_SCHEMA.instant_events") { result ->
                 assertTrue(result.next())
                 assertEquals(epochMillis, result.getLong(1))
@@ -280,7 +280,7 @@ class PostgresMigrationGeneratorTest {
         )
 
         val safePlan = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = true)
-        assertFalse(safePlan.statements.any { it.contains("VIEW", ignoreCase = true) })
+        assertFalse(safePlan.sqlStatements.any { it.contains("VIEW", ignoreCase = true) })
         assertEquals(
             listOf(
                 DestructivePostgresMigrationChange.DROP_VIEW,
@@ -290,7 +290,7 @@ class PostgresMigrationGeneratorTest {
         )
 
         val destructivePlan = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = false)
-        val viewStatements = destructivePlan.statements.filter { it.contains("VIEW", ignoreCase = true) }
+        val viewStatements = destructivePlan.sqlStatements.filter { it.contains("VIEW", ignoreCase = true) }
         assertTrue(viewStatements.first().startsWith("DROP VIEW"))
         assertTrue(viewStatements.last().startsWith("CREATE VIEW"))
     }
@@ -316,7 +316,7 @@ class PostgresMigrationGeneratorTest {
 
         val plan = PostgresMigrationGenerator.plan(database, materializedSchema, nonDestructive = true)
 
-        assertFalse(plan.statements.any { it.contains("MATERIALIZED VIEW", ignoreCase = true) })
+        assertFalse(plan.sqlStatements.any { it.contains("MATERIALIZED VIEW", ignoreCase = true) })
         assertEquals(2, plan.suppressedStatements.size)
         assertTrue(
             plan.suppressedStatements.all {

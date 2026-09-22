@@ -10,7 +10,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.Data
 import org.tekfive.keep.data.DataTable
 import org.tekfive.keep.data.TestDatabase
-import org.tekfive.keep.migration.PostgresMigrationGenerator
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
