@@ -472,9 +472,13 @@ resolved before applying a migration that enables it.
 
 ### PostgreSQL Migration Generation
 
-`PostgresMigrationGenerator` compares a `KeepSchema` with an existing PostgreSQL schema. It produces a reviewable SQL file without committing schema changes to the database.
+`org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator` compares a `KeepSchema` with an existing
+PostgreSQL schema. It produces an ordered, typed `PostgresMigrationPlan` without committing schema
+changes to the database. `toSql()` and `writeTo()` render the plan as a reviewable SQL script.
 
 ```kotlin
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
+
 object ApplicationSchema : KeepSchema("public") {
     override val tables = listOf(UsersTable, OrdersTable)
     override val views = listOf(
@@ -497,6 +501,51 @@ plan.suppressedStatements.forEach {
     println("Suppressed ${it.reason}: ${it.sql}")
 }
 ```
+
+`plan.statements` contains `PostgresMigrationStatement` values such as `CreateTable`, `RenameColumn`,
+`AlterColumnType`, `AddConstraint`, `CreateIndex`, and `CreateOrReplaceView`. Each exposes the affected
+objects and operation-specific fields. Suppressed entries retain the typed statement and its reason.
+`plan.sqlStatements` provides the rendered strings when needed. The generator adapts Exposed DDL
+strictly: unsupported syntax fails planning rather than becoming an opaque SQL statement.
+
+The dynamic package also provides statements for sequences, functions, triggers, extensions, enum
+types, identity/generated columns, and comments. These can be assembled into plans directly; support
+for a statement does not imply the generator automatically infers that change. SQL expressions,
+queries, and function bodies remain explicitly trusted fragments in `SqlExpression`, `SqlQuery`, and
+`SqlBody`. Object identifiers are quoted separately.
+
+Execute a plan after reviewing it:
+
+```kotlin
+val plan = PostgresMigrationGenerator.plan(database, ApplicationSchema, nonDestructive = true)
+plan.writeTo(Path.of("migration.sql"))
+val executedCount = plan.execute(database)
+
+// Inside an existing Exposed/KEEP transaction:
+db {
+    plan.execute()
+}
+```
+
+These are alternative execution forms; execute a generated plan once. `execute(database)` opens a
+transaction or joins the caller's transaction on that database. `execute()` requires an existing
+transaction. Both preflight the entire plan and execute atomically using a savepoint: a failed
+statement rolls back the plan's preceding work while preserving the caller's earlier writes.
+Joining a transaction does not commit it. Suppressed operations are never executed.
+
+Operations marked `TransactionRequirement.AUTOCOMMIT`, including concurrent index creation/deletion
+and enum-value additions, require `plan.executeAutocommit(database)`. This explicit mode opens a
+dedicated connection and cannot run inside a caller transaction. Earlier successful statements stay
+committed if a later statement fails. `PostgresMigrationExecutionException.statementIndex` identifies
+the failed operation (zero-based), and `sql` identifies its rendered statement. Enum additions use
+autocommit so subsequent operations can use the new values. Execution checks minimum PostgreSQL
+versions before running any statements.
+
+Dynamic execution does not record migration versions or acquire the versioned runner's advisory
+lock. Use `MigrationRunner` with an application-owned `Migration` when version tracking is needed;
+its `apply` method can call a transactional plan's `execute()`. Concurrent schema changes still need
+application-level coordination. The former generator in `org.tekfive.keep.migration` remains as a
+deprecated compatibility facade returning rendered SQL plans.
 
 `KeepSchema` is authoritative for its PostgreSQL schema. Destructive mode can remove ordinary tables, views, materialized views, standalone sequences, and columns not declared by it. PostgreSQL-owned sequences for serial and identity columns remain managed by their tables.
 

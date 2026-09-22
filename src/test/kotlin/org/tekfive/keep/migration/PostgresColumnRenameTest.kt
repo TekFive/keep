@@ -56,7 +56,7 @@ class PostgresColumnRenameTest {
             }
             val first = PostgresMigrationGenerator.plan(database, schema, nonDestructive = true)
             assertEquals(1, first.statements.size)
-            assertTrue(first.statements.single().contains("RENAME COLUMN \"$previous\" TO display_name"))
+            assertTrue(first.statements.single().contains("RENAME COLUMN \"$previous\" TO \"display_name\""))
             assertTrue(first.suppressedStatements.isEmpty())
             transaction(database) {
                 assertEquals("Ada", exec("SELECT $previous FROM $RENAME_SCHEMA.users") { result ->
