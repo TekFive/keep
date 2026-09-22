@@ -28,9 +28,10 @@ import java.util.UUID
  * Produces PostgreSQL SQL by comparing a [KeepSchema] with the current database schema.
  *
  * Planning reads PostgreSQL metadata and creates short-lived temporary objects to canonicalize
- * types and view queries. Pending column renames are simulated inside a savepoint and rolled back
- * before returning, including on failure. Simulation takes table locks and requires ALTER privileges.
- * The returned plan includes renames followed by the remaining changes; none are committed here.
+ * types and view queries. Missing extensions and pending column renames are simulated inside a
+ * savepoint and rolled back before returning, including on failure. Simulation requires extension
+ * installation privileges and, for renames, ALTER privileges and table locks. The returned plan
+ * includes extensions and renames followed by the remaining changes; none are committed here.
  */
 object PostgresMigrationGenerator {
 
@@ -70,11 +71,23 @@ object PostgresMigrationGenerator {
         val inventory = readInventory(connection, keepSchema.schemaName)
         validateExistingObjectKinds(keepSchema, inventory)
 
+        val extensions = missingExtensionStatements(connection, keepSchema.extensions)
         val renames = resolveColumnRenames(connection, keepSchema.tables)
-        return withSimulatedColumnRenames(connection, renames) {
+        val prerequisites = extensions + renames
+        return withSimulatedChanges(connection, prerequisites) {
             val remaining = planSchema(connection, keepSchema, inventory, nonDestructive)
-            remaining.copy(statements = renames + remaining.statements)
+            remaining.copy(statements = prerequisites + remaining.statements)
         }
+    }
+
+    private fun missingExtensionStatements(connection: Connection, extensions: List<String>): List<CreateExtension> {
+        if (extensions.isEmpty()) return emptyList()
+        val installed = connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT extname FROM pg_extension").use { result ->
+                buildSet { while (result.next()) add(result.getString(1)) }
+            }
+        }
+        return extensions.distinct().filterNot(installed::contains).map { CreateExtension(it) }
     }
 
     private fun planSchema(
@@ -217,12 +230,12 @@ object PostgresMigrationGenerator {
         }
     }
 
-    private fun <T> withSimulatedColumnRenames(
+    private fun <T> withSimulatedChanges(
         connection: Connection,
-        renames: List<RenameColumn>,
+        changes: List<PostgresMigrationStatement>,
         block: () -> T,
     ): T {
-        if (renames.isEmpty()) return block()
+        if (changes.isEmpty()) return block()
 
         val metadata = currentDialectMetadata
         // Keep the caller's earlier writes outside this savepoint. Roll back even after SQL errors,
@@ -230,7 +243,7 @@ object PostgresMigrationGenerator {
         val savepoint = connection.setSavepoint()
         var planningFailure: Throwable? = null
         try {
-            connection.createStatement().use { statement -> renames.forEach { statement.execute(it.toSql()) } }
+            connection.createStatement().use { statement -> changes.forEach { statement.execute(it.toSql()) } }
             metadata.resetCaches()
             return block()
         } catch (failure: Throwable) {
@@ -241,7 +254,7 @@ object PostgresMigrationGenerator {
                 try {
                     connection.rollback(savepoint)
                 } catch (rollbackFailure: Throwable) {
-                    // Never leave a connection usable for committing simulated renames if restoration fails.
+                    // Never leave a connection usable for committing simulated changes if restoration fails.
                     try {
                         connection.close()
                     } catch (closeFailure: Throwable) {
@@ -473,6 +486,7 @@ object PostgresMigrationGenerator {
 
     private fun validateKeepSchema(keepSchema: KeepSchema) {
         validateIdentifier(keepSchema.schemaName, "schema")
+        keepSchema.extensions.forEach { validateIdentifier(it, "extension") }
         keepSchema.views.forEach {
             validateIdentifier(it.name, "view")
             require(it.query.withoutTrailingSemicolon().isNotBlank()) { "View ${it.name} has a blank query" }
@@ -807,6 +821,13 @@ object PostgresMigrationGenerator {
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = ?
               AND c.relkind IN ('r', 'p', 'f', 'v', 'm', 'S')
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_depend d
+                  WHERE d.classid = 'pg_class'::regclass
+                    AND d.objid = c.oid
+                    AND d.refclassid = 'pg_extension'::regclass
+                    AND d.deptype = 'e'
+              )
         """.trimIndent()
         return connection.prepareStatement(sql).use { statement ->
             statement.setString(1, schema)

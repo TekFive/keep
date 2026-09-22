@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.27")
+implementation("com.github.TekFive:keep:v1.0.28")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -549,6 +549,18 @@ application-level coordination.
 The former generator and raw-SQL plan in `org.tekfive.keep.migration` have been removed. Update
 imports to `org.tekfive.keep.migration.dynamic`; use `plan.statements` for typed operations or
 `plan.sqlStatements` for rendered SQL strings.
+
+Extensions declared in `KeepSchema.extensions` produce typed `CreateExtension` operations when
+missing from the database, before dependent columns, tables, or views. Installed extensions are
+recognized across schemas; undeclared extensions and extension-owned objects are preserved in
+both modes. Names are safely quoted, and duplicate declarations produce one operation. Installation
+uses PostgreSQL's default extension schema selection (the connection's search path unless the
+extension specifies a schema), so use the same search path for planning and execution.
+
+To compare extension-dependent types and views, planning temporarily installs missing extensions
+inside a savepoint and always rolls back before returning, including on failure. Planning therefore
+requires permission to install missing extensions, and their server-side extension files must be
+available. Existing extensions are neither upgraded nor relocated automatically.
 
 `KeepSchema` is authoritative for its PostgreSQL schema. Destructive mode can remove ordinary tables, views, materialized views, standalone sequences, and columns not declared by it. PostgreSQL-owned sequences for serial and identity columns remain managed by their tables.
 
