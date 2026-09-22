@@ -16,6 +16,9 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.update
 import org.jetbrains.exposed.v1.jdbc.updateReturning
 import org.tekfive.keep.data.DataTable
+import org.tekfive.keep.schema.postgresObjects
+import org.tekfive.keep.schema.indexKey
+import org.tekfive.keep.migration.dynamic.SqlExpression
 import org.tekfive.keep.data.dataEnum
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
@@ -58,13 +61,17 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val timeoutSeconds = integer("timeout_seconds").nullable()
     val maxRuntimeSeconds = integer("max_runtime_seconds").nullable()
 
-    override val customIndices = listOf(
-        "CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq ON $tableName (type, lock_key) WHERE state = ${JobState.RUNNING.id} AND lock_key IS NOT NULL",
-        "CREATE INDEX IF NOT EXISTS job_records_running_concurrency_scope_idx ON $tableName (type, concurrency_key) WHERE state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq ON $tableName (type) WHERE scheduled_job = TRUE AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})",
-        "CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx ON $tableName (priority DESC, created_at) WHERE state = ${JobState.PENDING.id}",
-        "CREATE INDEX IF NOT EXISTS job_records_type_state_idx ON $tableName (type, state)",
-    )
+    override val postgresObjects = postgresObjects {
+        index("job_records_running_type_lock_key_uq", type, lockKey, unique = true,
+            predicate = SqlExpression("state = ${JobState.RUNNING.id} AND lock_key IS NOT NULL"))
+        index("job_records_running_concurrency_scope_idx", type, concurrencyKey,
+            predicate = SqlExpression("state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL"))
+        index("job_records_scheduled_chain_type_uq", type, unique = true,
+            predicate = SqlExpression("scheduled_job = TRUE AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})"))
+        index("job_records_pending_priority_created_idx", listOf(priority.indexKey(SortOrder.DESC), createdAt.indexKey()),
+            predicate = SqlExpression("state = ${JobState.PENDING.id}"))
+        index("job_records_type_state_idx", type, state)
+    }
 
     fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord {
         return db {

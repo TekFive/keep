@@ -3,7 +3,6 @@ package org.tekfive.keep.schema
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.TransactionManager
 import org.tekfive.keep.data.DataTable
-import org.tekfive.keep.data.DataTableSchemaHooks
 import org.tekfive.keep.db.db
 import org.tekfive.keep.db.dbConnection
 import kotlin.io.use
@@ -33,6 +32,7 @@ abstract class AppSchema(
 
     /** Creates database extensions and all tables. Must be called within a transaction. */
     open fun create() {
+        validateSharedDefinitions()
 
         for (sequence in sequenceNames) {
             TransactionManager.current().exec("CREATE SEQUENCE IF NOT EXISTS $sequence AS BIGINT MAXVALUE 9223372036854775807 START 1;")
@@ -40,19 +40,17 @@ abstract class AppSchema(
         for (ext in extensions) {
             TransactionManager.current().exec("CREATE EXTENSION IF NOT EXISTS \"$ext\"")
         }
-        runDataTableSql { it.customTypes }
+        types.flatMap { it.createStatements(PostgresRenderContext(schemaName)) }.forEach { TransactionManager.current().exec(it) }
         SchemaUtils.create(*tables.toTypedArray())
-        runDataTableSql { it.customIndices }
         val metadata = dbConnection().metaData
         val postgresContext = PostgresRenderContext(
             schemaName,
             PostgresTargetVersion(metadata.databaseMajorVersion, metadata.databaseMinorVersion),
         )
         declaredPostgresObjects
-            .sortedBy { if (it is PostgresUniqueConstraintDefinition) 0 else 1 }
+            .sortedBy { it.creationOrder }
             .flatMap { it.createStatements(postgresContext) }
             .forEach { sql -> TransactionManager.current().exec(sql) }
-        runDataTableSql { it.postSchemaCreateSql }
     }
 
     /** Creates extensions and only the tables that do not already exist. Must be called within a transaction. */
@@ -84,11 +82,4 @@ abstract class AppSchema(
         }
     }
 
-    private fun runDataTableSql(sqlProvider: (DataTableSchemaHooks) -> List<String>) {
-        tables.filterIsInstance<DataTableSchemaHooks>().forEach { table ->
-            sqlProvider(table).forEach { sql ->
-                TransactionManager.current().exec(sql)
-            }
-        }
-    }
 }

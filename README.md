@@ -341,7 +341,7 @@ Schema helpers also provide common timestamp, active, description, foreign-key, 
 
 ### Connection-Free Fresh Installation SQL
 
-`PostgresFreshInstallGenerator` renders a complete PostgreSQL installation script from a `KeepSchema` without opening a database connection. This is a fresh install, not a comparison or merge. It includes the schema, extensions, custom types, sequences, tables, constraints, indexes, table hooks, views, and materialized views in dependency order.
+`PostgresFreshInstallGenerator` renders a complete PostgreSQL installation script from a `KeepSchema` without opening a database connection. This is a fresh install, not a comparison or merge. It includes the schema, extensions, typed enums, sequences, tables, constraints, indexes, views, and materialized views in dependency order.
 
 ```kotlin
 object ApplicationSchema : KeepSchema("app") {
@@ -374,7 +374,72 @@ PostgresFreshInstallGenerator.generate(
 `PGCRYPTO`, `PG_STAT_STATEMENTS`, `PG_TRGM`, `POSTGIS`, `TABLEFUNC`, `UNACCENT`, and `UUID_OSSP`.
 For example, use `listOf(KeepSchema.CITEXT, KeepSchema.PG_TRGM)`. Custom extension names remain strings.
 
-`beforeTablesSql` and `afterTablesSql` provide ordered escape hatches for application-specific types, functions, triggers, grants, and other PostgreSQL objects not represented by Exposed tables. Foreign-key targets must all be declared in the same `KeepSchema`, preventing an apparently complete script from silently depending on an undeclared table.
+`beforeTablesSql` and `afterTablesSql` remain fresh-install-only SQL escape hatches for objects outside the typed declarations; dynamic migration does not compare or replay them. Foreign-key targets must all be declared in the same `KeepSchema`, preventing an apparently complete script from silently depending on an undeclared table.
+
+`DataTableSchema` replaces `DataTableSchemaHooks` and has one declaration property:
+`postgresObjects: List<PostgresTableObject>`. `DataTable` and `UuidDataTable` implement it.
+The former `customTypes`, `customIndices`, `postSchemaCreateSql`, and `postSchemaCreate` properties
+are removed. Fresh installation, `AppSchema.create()`, and dynamic migrations share the same typed
+object definitions, and order creation by dependencies rather than hook phases.
+
+Declare shared types on `KeepSchema`:
+
+```kotlin
+override val types = listOf(
+    PostgresEnumDefinition("pipeline_status", listOf("draft", "published", "archived")),
+)
+```
+
+Types are created before tables. Dynamic migrations support creating enums and adding labels in
+declaration order; adding labels to an existing enum requires `plan.executeAutocommit(database)`.
+Removing or reordering existing labels requires an explicit data migration. Undeclared application
+enums are dropped after dependent table changes in destructive mode and retained in non-destructive
+mode. Extension-owned types are preserved. Missing types are temporarily created during planning
+and rolled back before it returns, together with simulated extension installations and renames.
+
+Use the table's `postgresObjects` DSL for indexes, unique/foreign-key/check/exclusion constraints,
+and row triggers. Use a getter or lazy initializer when referring to other table objects:
+
+```kotlin
+override val postgresObjects by lazy {
+    postgresObjects {
+        foreignKeyConstraint(
+            "pursuit_pipeline_assignments_current_stage_version_fk",
+            pipelineVersionId to PipelineStages.pipelineVersionId,
+            currentStageId to PipelineStages.id,
+        )
+        index("assignments_stage_idx", pipelineVersionId, currentStageId)
+        index(
+            "assignments_recent_idx",
+            listOf(createdAt.indexKey(SortOrder.DESC)),
+            include = listOf(currentStageId),
+            predicate = SqlExpression("current_stage_id IS NOT NULL"),
+        )
+        checkConstraint("assignments_positive_version", SqlExpression("pipeline_version_id > 0"))
+    }
+}
+```
+
+Index declarations support uniqueness, access methods, included columns, sort order, expression
+keys (`PostgresIndexKey.ExpressionKey`), predicates, and PostgreSQL 15+ `nullsNotDistinct`.
+Expressions and predicates use unqualified column names inside explicit `SqlExpression` fragments;
+complete DDL statements are not declarations. `exclusionConstraint` accepts a list of typed
+`ExclusionElement` values (expression plus operator), an index method, and an optional predicate.
+Dynamic comparison uses PostgreSQL-normalized definitions, so harmless formatting differences do
+not rebuild indexes or constraints. Changed indexes and expression constraints are replaced;
+removed declarations are dropped while preserving stored rows. Matching definitions emit no SQL.
+
+Column pairs preserve the order of a composite foreign key. Both tables must be listed in
+`KeepSchema.tables`; the referenced columns must form a PostgreSQL primary or unique key.
+All tables and unique keys are created before these foreign keys, even when the referencing table
+is listed first. The builder also accepts `onDelete` and `onUpdate` (`PostgresForeignKeyAction`),
+`deferrable`, and `initiallyDeferred`.
+
+Dynamic migrations compare foreign-key targets, ordered columns, referential actions, and deferral
+settings. They add missing constraints, replace changed ones, validate matching `NOT VALID`
+constraints, and remove foreign keys no longer declared on managed tables. Foreign keys declared
+through Exposed are also retained. Constraint removal is permitted in non-destructive mode because
+it preserves stored rows. Matching declarations emit no SQL.
 
 The target PostgreSQL version is explicit and defaults to PostgreSQL 16, making dialect decisions deterministic. Generated scripts can be checked into source control or packaged with an application.
 
@@ -907,4 +972,4 @@ db {
 }
 ```
 
-Schema creation handles common KEEP table hooks such as custom types, custom indices, and post-schema SQL defined by `DataTable` implementations.
+Schema creation applies `KeepSchema.types` and the typed `postgresObjects` declared by KEEP tables.

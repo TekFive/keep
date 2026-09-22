@@ -1,7 +1,7 @@
 package org.tekfive.keep.schema
 
 import org.jetbrains.exposed.v1.core.Table
-import org.tekfive.keep.data.DataTableSchemaHooks
+import org.tekfive.keep.data.DataTableSchema
 import org.tekfive.keep.data.TypedDataTuple
 
 /**
@@ -18,6 +18,9 @@ abstract class KeepSchema(
 
     /** PostgreSQL extensions required before types and tables are created, e.g. [CITEXT] or [POSTGIS]. */
     open val extensions: List<String> = emptyList()
+
+    /** Schema-owned types shared by any number of tables. */
+    open val types: List<PostgresTypeDefinition> = emptyList()
 
     open val views: List<PostgresViewDefinition> = emptyList()
 
@@ -38,12 +41,12 @@ abstract class KeepSchema(
     open val afterTablesSql: List<String> = emptyList()
 
     /** Schema-level PostgreSQL objects. Table-owned objects can also be declared through table hooks. */
-    open val postgresObjects: List<PostgresSchemaObject> = emptyList()
+    open val postgresObjects: List<PostgresTableObject> = emptyList()
 
     /** Every first-class PostgreSQL object declared by the schema or one of its tables. */
-    val declaredPostgresObjects: List<PostgresSchemaObject>
+    val declaredPostgresObjects: List<PostgresTableObject>
         get() = postgresObjects +
-            tables.filterIsInstance<DataTableSchemaHooks>().flatMap { it.postgresObjects } +
+            tables.filterIsInstance<DataTableSchema>().flatMap { it.postgresObjects } +
             tables.filterIsInstance<TypedDataTuple<*, *>>().flatMap { it.columnPostgresObjects }
 
     /** Well-known extension names for [extensions]; custom names can also be supplied. */

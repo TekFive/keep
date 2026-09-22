@@ -52,9 +52,7 @@ private object FreshInstallSchema : KeepSchema(FRESH_SCHEMA) {
             cache = 10,
         )
     )
-    override val beforeTablesSql = listOf(
-        "CREATE TYPE $FRESH_SCHEMA.install_state AS ENUM ('ready', 'complete')"
-    )
+    override val types = listOf(PostgresEnumDefinition("install_state", listOf("ready", "complete")))
     override val afterTablesSql = listOf(
         "COMMENT ON TABLE $FRESH_SCHEMA.accounts IS 'fresh install account table'"
     )
@@ -77,13 +75,14 @@ private object FreshHookTable : DataTable<FreshHookData>("fresh_hook_table") {
     val label = varchar("label", 100)
     override val postgresObjects = postgresObjects {
         uniqueConstraint("fresh_hook_label_uq", label)
+        index("fresh_hook_label_idx", label)
+        foreignKeyConstraint("fresh_hook_label_fk", label to label)
     }
-    override val customTypes = listOf("CREATE TYPE fresh_hook_type AS ENUM ('one', 'two')")
-    override val customIndices = listOf("CREATE INDEX fresh_hook_label_idx ON fresh_hook_table(label)")
-    override val postSchemaCreateSql = listOf("COMMENT ON TABLE fresh_hook_table IS 'hook table'")
+
 }
 
 private object FreshHookSchema : AppSchema() {
+    override val types = listOf(PostgresEnumDefinition("fresh_hook_type", listOf("one", "two")))
     override val extensions = listOf(KeepSchema.CITEXT)
     override val tables = listOf(FreshHookTable)
 }
@@ -125,15 +124,15 @@ class PostgresFreshInstallGeneratorOfflineTest {
         val tableIndex = statements.indexOfFirst { it.startsWith("CREATE TABLE") }
         val customIndex = statements.indexOfFirst { it.contains("fresh_hook_label_idx") }
         val typedConstraint = statements.indexOfFirst { it.contains("fresh_hook_label_uq") }
-        val commentIndex = statements.indexOfFirst { it.startsWith("COMMENT ON TABLE") }
+        val foreignKeyIndex = statements.indexOfFirst { it.contains("fresh_hook_label_fk") }
 
         assertEquals(1, sequenceIndices.size)
         assertTrue(extensionIndex < typeIndex)
         assertTrue(typeIndex < sequenceIndices.single())
         assertTrue(sequenceIndices.single() < tableIndex)
         assertTrue(tableIndex < customIndex)
-        assertTrue(customIndex < typedConstraint)
-        assertTrue(typedConstraint < commentIndex)
+        assertTrue(tableIndex < typedConstraint)
+        assertTrue(typedConstraint < foreignKeyIndex)
     }
 
     @Test

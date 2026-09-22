@@ -6,6 +6,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.tekfive.keep.data.TestDatabase
 import org.tekfive.keep.schema.AppSchema
 import org.tekfive.keep.schema.PostgresFreshInstallGenerator
+import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -15,6 +16,7 @@ private const val JOB_SCHEMA = "keep_job_install_test"
 
 private object JobInstallSchema : AppSchema(JOB_SCHEMA) {
     override val tables = listOf(JobRecordsTable, JobRecordLogsTable)
+    override val sequences = listOf("globalid")
 }
 
 /** Verifies the job tables, their custom indices, and the log foreign key install cleanly. */
@@ -59,6 +61,11 @@ class JobSchemaInstallTest {
             foreignKeys.contains("job_record_logs_job_record_id_fk"),
             "Missing job record log foreign key, found: $foreignKeys",
         )
+        transaction(database) {
+            exec("SET LOCAL search_path TO $JOB_SCHEMA, public")
+            val plan = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
+            assertTrue(plan.isEmpty, "Job indexes must be preserved by dynamic migrations: $plan")
+        }
     }
 
     private fun indexNames(): Set<String> {

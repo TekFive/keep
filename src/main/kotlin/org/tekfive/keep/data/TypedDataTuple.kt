@@ -12,7 +12,7 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.tekfive.keep.db.TransactionCache
 import org.tekfive.keep.db.db
 import org.tekfive.keep.paged.PagedResult
-import org.tekfive.keep.schema.PostgresSchemaObject
+import org.tekfive.keep.schema.PostgresTableObject
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.TypeVariable
 import java.util.Collections
@@ -46,7 +46,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
 ) : Table(name) {
 
     /** Column-declared objects are collected separately from overridable table schema hooks. */
-    internal val columnPostgresObjects = mutableListOf<PostgresSchemaObject>()
+    internal val columnPostgresObjects = mutableListOf<PostgresTableObject>()
 
     internal val columnPreviousNames = linkedMapOf<String, List<String>>()
 

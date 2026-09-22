@@ -9,14 +9,50 @@ import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.neq
 import org.jetbrains.exposed.v1.core.or
+import org.tekfive.keep.migration.dynamic.SqlExpression
+import org.tekfive.keep.migration.dynamic.ConstraintDefinition
+import org.tekfive.keep.migration.dynamic.ExclusionElement
 
 /** A PostgreSQL-specific object owned by a [KeepSchema]. */
-sealed interface PostgresSchemaObject {
+sealed interface PostgresTableObject {
     val name: String
     val table: Table
 
     /** Complete SQL required to create this object after its table exists. */
     fun createStatements(context: PostgresRenderContext): List<String>
+}
+
+internal val PostgresTableObject.creationOrder: Int
+    get() = when (this) {
+        is PostgresIndexDefinition -> 0
+        is PostgresExpressionConstraintDefinition -> 0
+        is PostgresUniqueConstraintDefinition -> 0
+        is PostgresForeignKeyConstraintDefinition -> 1
+        is PostgresRowTriggerDefinition -> 2
+    }
+
+enum class PostgresForeignKeyAction { NO_ACTION, RESTRICT, CASCADE, SET_NULL, SET_DEFAULT }
+
+/** A foreign key whose ordered column pairs may reference a table created later. */
+class PostgresForeignKeyConstraintDefinition internal constructor(
+    override val name: String,
+    override val table: Table,
+    val references: List<Pair<Column<*>, Column<*>>>,
+    val onDelete: PostgresForeignKeyAction,
+    val onUpdate: PostgresForeignKeyAction,
+    val deferrable: Boolean,
+    val initiallyDeferred: Boolean,
+) : PostgresTableObject {
+    val referencedTable: Table get() = references.first().second.table
+
+    override fun createStatements(context: PostgresRenderContext): List<String> = listOf(
+        "ALTER TABLE ${context.tableName(table)} ADD CONSTRAINT ${context.identifier(name)} " +
+            "FOREIGN KEY (${references.joinToString { context.identifier(it.first.name) }}) " +
+            "REFERENCES ${context.tableName(referencedTable)} " +
+            "(${references.joinToString { context.identifier(it.second.name) }}) " +
+            "ON DELETE ${onDelete.name.replace('_', ' ')} ON UPDATE ${onUpdate.name.replace('_', ' ')}" +
+            (if (deferrable) " DEFERRABLE" else "") + (if (initiallyDeferred) " INITIALLY DEFERRED" else "")
+    )
 }
 
 /** Rendering context for connection-free PostgreSQL schema objects. */
@@ -50,7 +86,7 @@ class PostgresUniqueConstraintDefinition internal constructor(
     override val table: Table,
     val columns: List<Column<*>>,
     val nullsNotDistinct: Boolean = false,
-) : PostgresSchemaObject {
+) : PostgresTableObject {
     override fun createStatements(context: PostgresRenderContext): List<String> {
         require(!nullsNotDistinct || context.targetVersion.major >= 15) {
             "UNIQUE NULLS NOT DISTINCT requires PostgreSQL 15 or newer (constraint $name)"
@@ -71,7 +107,7 @@ class PostgresRowTriggerDefinition internal constructor(
     val timing: PostgresTriggerTiming,
     val events: Set<PostgresTriggerEvent>,
     internal val handlers: Map<PostgresTriggerEvent, List<PostgresTriggerStatement>>,
-) : PostgresSchemaObject {
+) : PostgresTableObject {
 
     override fun createStatements(context: PostgresRenderContext): List<String> = listOf(
         createFunctionStatement(context),
@@ -113,13 +149,42 @@ class PostgresRowTriggerDefinition internal constructor(
 }
 
 /** Creates PostgreSQL objects bound to this table, validating every referenced column. */
-fun Table.postgresObjects(block: PostgresTableObjectsBuilder.() -> Unit): List<PostgresSchemaObject> =
+fun Table.postgresObjects(block: PostgresTableObjectsBuilder.() -> Unit): List<PostgresTableObject> =
     PostgresTableObjectsBuilder(this).apply(block).build()
 
 class PostgresTableObjectsBuilder internal constructor(
     private val table: Table,
 ) {
-    private val objects = mutableListOf<PostgresSchemaObject>()
+    private val objects = mutableListOf<PostgresTableObject>()
+
+    fun checkConstraint(name: String, expression: SqlExpression) {
+        validateName(name, "constraint")
+        objects += PostgresCheckConstraintDefinition(name, table, ConstraintDefinition.Check(name, expression))
+    }
+
+    fun exclusionConstraint(name: String, elements: List<ExclusionElement>, method: String = "gist", predicate: SqlExpression? = null) {
+        validateName(name, "constraint")
+        require(elements.isNotEmpty()) { "Exclusion constraint $name requires elements" }
+        objects += PostgresExclusionConstraintDefinition(name, table, ConstraintDefinition.Exclusion(name, elements, method, predicate))
+    }
+
+    fun index(
+        name: String, vararg columns: Column<*>, unique: Boolean = false, method: String = "btree",
+        include: List<Column<*>> = emptyList(), predicate: SqlExpression? = null, nullsNotDistinct: Boolean = false,
+    ) = index(name, columns.map { it.indexKey() }, unique, method, include, predicate, nullsNotDistinct)
+
+    fun index(
+        name: String, keys: List<PostgresIndexKey>, unique: Boolean = false, method: String = "btree",
+        include: List<Column<*>> = emptyList(), predicate: SqlExpression? = null, nullsNotDistinct: Boolean = false,
+    ) {
+        validateName(name, "index")
+        validateName(method, "index method")
+        require(keys.isNotEmpty()) { "Index $name requires keys" }
+        require(!nullsNotDistinct || unique) { "NULLS NOT DISTINCT requires a unique index" }
+        validateColumns(keys.filterIsInstance<PostgresIndexKey.ColumnKey>().map { it.column } + include)
+        require(include.distinct().size == include.size) { "Duplicate included columns in index $name" }
+        objects += PostgresIndexDefinition(name, table, keys.toList(), unique, method, include.toList(), predicate, nullsNotDistinct)
+    }
 
     /** Treats nulls as equal when [nullsNotDistinct] is true (PostgreSQL 15+). */
     fun uniqueConstraint(name: String, vararg columns: Column<*>, nullsNotDistinct: Boolean = false) {
@@ -128,6 +193,24 @@ class PostgresTableObjectsBuilder internal constructor(
         validateColumns(columns.asList())
         require(columns.toSet().size == columns.size) { "UNIQUE constraint $name contains duplicate columns" }
         objects += PostgresUniqueConstraintDefinition(name, table, columns.asList(), nullsNotDistinct)
+    }
+
+    fun foreignKeyConstraint(
+        name: String,
+        vararg references: Pair<Column<*>, Column<*>>,
+        onDelete: PostgresForeignKeyAction = PostgresForeignKeyAction.NO_ACTION,
+        onUpdate: PostgresForeignKeyAction = PostgresForeignKeyAction.NO_ACTION,
+        deferrable: Boolean = false,
+        initiallyDeferred: Boolean = false,
+    ) {
+        validateName(name, "constraint")
+        require(references.isNotEmpty()) { "Foreign key $name requires at least one column pair" }
+        validateColumns(references.map { it.first })
+        require(references.map { it.second.table }.distinct().size == 1) { "Foreign key $name must reference one table" }
+        require(references.map { it.first }.distinct().size == references.size &&
+            references.map { it.second }.distinct().size == references.size) { "Foreign key $name contains duplicate columns" }
+        require(!initiallyDeferred || deferrable) { "Initially deferred foreign key $name must be deferrable" }
+        objects += PostgresForeignKeyConstraintDefinition(name, table, references.toList(), onDelete, onUpdate, deferrable, initiallyDeferred)
     }
 
     fun rowTrigger(
@@ -140,7 +223,7 @@ class PostgresTableObjectsBuilder internal constructor(
         objects += PostgresRowTriggerBuilder(table, name, functionName).apply(block).build()
     }
 
-    internal fun build(): List<PostgresSchemaObject> {
+    internal fun build(): List<PostgresTableObject> {
         val duplicateNames = objects.groupingBy { it.name.lowercase() }.eachCount().filterValues { it > 1 }.keys
         require(duplicateNames.isEmpty()) { "Duplicate PostgreSQL object names on ${table.tableName}: $duplicateNames" }
         return objects.toList()

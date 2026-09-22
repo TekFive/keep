@@ -2,7 +2,6 @@ package org.tekfive.keep.schema
 
 import org.jetbrains.exposed.v1.core.Sequence
 import org.jetbrains.exposed.v1.core.Table
-import org.tekfive.keep.data.DataTableSchemaHooks
 import java.nio.file.Path
 import java.util.Locale
 
@@ -32,9 +31,8 @@ object PostgresFreshInstallGenerator {
                 statements += "CREATE EXTENSION IF NOT EXISTS ${quoteIdentifier(extension)}"
             }
 
-            val tableHooks = keepSchema.tables.filterIsInstance<DataTableSchemaHooks>()
             statements += keepSchema.beforeTablesSql
-            statements += tableHooks.flatMap { it.customTypes }
+            statements += keepSchema.types.flatMap { it.createStatements(PostgresRenderContext(keepSchema.schemaName, targetVersion)) }
 
             val tableDdl = renderTables(keepSchema.tables)
             statements += renderSequences(keepSchema.sequenceDefinitions, tableDdl.sequenceStatements)
@@ -42,11 +40,9 @@ object PostgresFreshInstallGenerator {
             statements += tableDdl.afterTableStatements
             statements += tableDdl.indexStatements
 
-            statements += tableHooks.flatMap { it.customIndices }
             val postgresContext = PostgresRenderContext(keepSchema.schemaName, targetVersion)
             statements += orderedPostgresObjects(keepSchema.declaredPostgresObjects)
                 .flatMap { it.createStatements(postgresContext) }
-            statements += tableHooks.flatMap { it.postSchemaCreateSql }
             statements += keepSchema.afterTablesSql
 
             keepSchema.views.forEach { view ->
@@ -119,6 +115,7 @@ object PostgresFreshInstallGenerator {
     }
 
     private fun validate(keepSchema: KeepSchema) {
+        keepSchema.validateSharedDefinitions()
         require(keepSchema.schemaName.isNotBlank()) { "KeepSchema schemaName must not be blank" }
         validateNames("extension", keepSchema.extensions)
         validateNames("sequence", keepSchema.sequenceDefinitions.map { it.name })
@@ -137,8 +134,11 @@ object PostgresFreshInstallGenerator {
         require(postgresObjects.all { it.table in keepSchema.tables }) {
             "PostgreSQL schema objects may only target tables declared by KeepSchema"
         }
+        require(postgresObjects.filterIsInstance<PostgresForeignKeyConstraintDefinition>().all {
+            it.referencedTable in keepSchema.tables
+        }) { "Foreign-key targets must be declared in KeepSchema.tables" }
         val duplicateObjects = postgresObjects
-            .groupingBy { Triple(it::class, it.table, it.name.lowercase(Locale.ROOT)) }
+            .groupingBy { Triple(if (it is PostgresRowTriggerDefinition) "trigger" else "constraint", it.table, it.name.lowercase(Locale.ROOT)) }
             .eachCount()
             .filterValues { it > 1 }
             .keys
@@ -239,13 +239,8 @@ object PostgresFreshInstallGenerator {
         startWith != null || incrementBy != null || minValue != null || maxValue != null ||
             cycle != null || cache != null
 
-    private fun orderedPostgresObjects(objects: List<PostgresSchemaObject>): List<PostgresSchemaObject> =
-        objects.sortedBy {
-            when (it) {
-                is PostgresUniqueConstraintDefinition -> 0
-                is PostgresRowTriggerDefinition -> 1
-            }
-        }
+    private fun orderedPostgresObjects(objects: List<PostgresTableObject>): List<PostgresTableObject> =
+        objects.sortedBy { it.creationOrder }
 
     private data class RenderedTables(
         val sequenceStatements: List<String>,

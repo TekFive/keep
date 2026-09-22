@@ -1,5 +1,6 @@
 package org.tekfive.keep.data
 
+import org.tekfive.keep.schema.postgresObjects
 import org.tekfive.keep.array.setArray
 
 // ---------------------------------------------------------------------------
@@ -130,7 +131,7 @@ class UuidSimpleData(val name: String, var score: Int) : UuidData()
 object UuidSimpleTable : UuidDataTable<UuidSimpleData>("uuid_simple"), UuidTableWithUniqueName {
     override val name = varchar("name", 255)
     val score = integer("score")
-    override val customIndices = listOf("CREATE INDEX uuid_simple_score_custom_idx ON uuid_simple(score)")
+    override val postgresObjects = postgresObjects { index("uuid_simple_score_custom_idx", score) }
 }
 
 class UuidWidgetData(val label: String, var quantity: Int) : UuidData()

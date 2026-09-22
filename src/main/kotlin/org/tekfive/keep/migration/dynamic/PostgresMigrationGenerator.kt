@@ -17,6 +17,12 @@ import org.tekfive.keep.schema.PostgresTargetVersion
 import org.tekfive.keep.schema.PostgresTriggerEvent
 import org.tekfive.keep.schema.PostgresTriggerTiming
 import org.tekfive.keep.schema.PostgresUniqueConstraintDefinition
+import org.tekfive.keep.schema.PostgresForeignKeyConstraintDefinition
+import org.tekfive.keep.schema.PostgresIndexDefinition
+import org.tekfive.keep.schema.PostgresExpressionConstraintDefinition
+import org.tekfive.keep.schema.PostgresExclusionConstraintDefinition
+import org.tekfive.keep.schema.creationOrder
+import org.tekfive.keep.schema.validateSharedDefinitions
 import org.tekfive.keep.schema.PostgresViewDefinition
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -72,11 +78,14 @@ object PostgresMigrationGenerator {
         validateExistingObjectKinds(keepSchema, inventory)
 
         val extensions = missingExtensionStatements(connection, keepSchema.extensions)
+        val types = planEnumTypes(connection, keepSchema)
+        val typeSchema = if (types.creates.isNotEmpty() && !schemaExists(connection, keepSchema.schemaName))
+            listOf(CreateSchema(keepSchema.schemaName)) else emptyList()
         val renames = resolveColumnRenames(connection, keepSchema.tables)
-        val prerequisites = extensions + renames
+        val prerequisites = extensions + typeSchema + types.creates + renames
         return withSimulatedChanges(connection, prerequisites) {
-            val remaining = planSchema(connection, keepSchema, inventory, nonDestructive)
-            remaining.copy(statements = prerequisites + remaining.statements)
+            val remaining = planSchema(connection, keepSchema, inventory, nonDestructive, types.drops)
+            remaining.copy(statements = prerequisites + types.additions + remaining.statements)
         }
     }
 
@@ -95,6 +104,7 @@ object PostgresMigrationGenerator {
         keepSchema: KeepSchema,
         inventory: List<ExistingObject>,
         nonDestructive: Boolean,
+        typeDrops: List<DropType>,
     ): PostgresMigrationPlan {
         val candidates = mutableListOf<CandidateStatement>()
         if (!schemaExists(connection, keepSchema.schemaName)) {
@@ -134,6 +144,14 @@ object PostgresMigrationGenerator {
         viewPlans.asReversed().forEach { candidates += it.beforeTables }
         val postTableViewStatements = viewPlans.flatMap { it.afterTables }
 
+        val (foreignKeyDrops, foreignKeyAdds) = planForeignKeys(connection, keepSchema)
+        foreignKeyDrops.forEach { candidates += candidate(it) }
+        val indexes = planIndexes(connection, keepSchema)
+        val (constraintDrops, constraintAdds) = planExpressionConstraints(connection, keepSchema)
+        constraintDrops.forEach { candidates += candidate(it) }
+        indexes.drops.forEach { candidates += candidate(it) }
+        val ownedIndexNames = keepSchema.declaredPostgresObjects.filterIsInstance<PostgresIndexDefinition>().map { it.name }.toSet()
+
         if (keepSchema.tables.isNotEmpty()) {
             val exposedTableStatements = MigrationUtils.statementsRequiredForDatabaseMigration(
                 *keepSchema.tables.toTypedArray(),
@@ -148,6 +166,9 @@ object PostgresMigrationGenerator {
             exposedTableStatements
                 // PostgreSQL-native comparison below replaces Exposed's incomplete type detection.
                 .filterNot { it is AlterColumnType }
+                .filterNot { it is DropIndex && (it.name.name in ownedIndexNames || indexes.drops.any { drop -> drop.name.name == it.name.name }) }
+                .filterNot { it is CreateIndex && it.definition.name.name in ownedIndexNames }
+                .filterNot { it is DropConstraint && constraintDrops.any { drop -> drop.table == it.table && drop.name == it.name } }
                 // Exposed can misclassify multiple partial indexes on the same columns, and it
                 // does not know about KEEP's first-class PostgreSQL constraints.
                 .filterNot { dropsDeclaredPostgresObject(it, keepSchema, recreatedIndexNames) }
@@ -155,6 +176,9 @@ object PostgresMigrationGenerator {
         }
 
         candidates += planPostgresObjects(connection, keepSchema)
+        indexes.creates.forEach { candidates += candidate(it) }
+        constraintAdds.forEach { candidates += candidate(it) }
+        foreignKeyAdds.forEach { candidates += candidate(it) }
 
         candidates += postTableViewStatements
 
@@ -184,6 +208,7 @@ object PostgresMigrationGenerator {
         extraSequences.distinct().sorted().forEach { name ->
             candidates += candidate(DropSequence(QualifiedName(name, keepSchema.schemaName)))
         }
+        typeDrops.forEach { candidates += candidate(it) }
 
         if (nonDestructive) {
             // Retained, unmapped columns must allow inserts that only supply declared columns.
@@ -485,6 +510,7 @@ object PostgresMigrationGenerator {
         }
 
     private fun validateKeepSchema(keepSchema: KeepSchema) {
+        keepSchema.validateSharedDefinitions()
         validateIdentifier(keepSchema.schemaName, "schema")
         keepSchema.extensions.forEach { validateIdentifier(it, "extension") }
         keepSchema.views.forEach {
@@ -504,8 +530,11 @@ object PostgresMigrationGenerator {
         require(postgresObjects.all { it.table in keepSchema.tables }) {
             "PostgreSQL schema objects may only target tables declared by KeepSchema"
         }
+        require(postgresObjects.filterIsInstance<PostgresForeignKeyConstraintDefinition>().all {
+            it.referencedTable in keepSchema.tables
+        }) { "Foreign-key targets must be declared in KeepSchema.tables" }
         val duplicateObjects = postgresObjects
-            .groupingBy { Triple(it::class, it.table, it.name.lowercase(Locale.ROOT)) }
+            .groupingBy { Triple(if (it is PostgresRowTriggerDefinition) "trigger" else "constraint", it.table, it.name.lowercase(Locale.ROOT)) }
             .eachCount()
             .filterValues { it > 1 }
             .keys
@@ -530,13 +559,16 @@ object PostgresMigrationGenerator {
         )
         return buildList {
             keepSchema.declaredPostgresObjects
-                .sortedBy { if (it is PostgresUniqueConstraintDefinition) 0 else 1 }
+                .sortedBy { it.creationOrder }
                 .forEach { definition ->
                     when (definition) {
                         is PostgresUniqueConstraintDefinition ->
                             addAll(planUniqueConstraint(connection, context, definition))
                         is PostgresRowTriggerDefinition ->
                             addAll(planRowTrigger(connection, context, definition))
+                        is PostgresForeignKeyConstraintDefinition -> Unit // Planned separately around table changes.
+                        is PostgresIndexDefinition -> Unit
+                        is PostgresExpressionConstraintDefinition -> Unit
                     }
                 }
         }
@@ -549,16 +581,18 @@ object PostgresMigrationGenerator {
     ): Boolean {
         val droppedIndex = (statement as? DropIndex)?.name?.name
         if (droppedIndex != null) {
+            if (keepSchema.declaredPostgresObjects.any {
+                (it is PostgresUniqueConstraintDefinition || it is PostgresExclusionConstraintDefinition) && it.name == droppedIndex
+            }) return true
             if (recreatedIndexNames.any { it.equals(droppedIndex, ignoreCase = true) }) return false
             val declaredIndices = keepSchema.tables.flatMap { table -> table.indices.map { it.indexName } }
             return declaredIndices.any { it.equals(droppedIndex, ignoreCase = true) }
         }
 
-        val droppedConstraint = (statement as? DropConstraint)?.name
-            ?: return false
+        val dropped = statement as? DropConstraint ?: return false
         return keepSchema.declaredPostgresObjects
-            .filterIsInstance<PostgresUniqueConstraintDefinition>()
-            .any { it.name.equals(droppedConstraint, ignoreCase = true) }
+            .filter { it is PostgresUniqueConstraintDefinition || it is PostgresForeignKeyConstraintDefinition || it is PostgresExpressionConstraintDefinition }
+            .any { it.name == dropped.name && it.table.nameInDatabaseCaseUnquoted() == dropped.table.name }
     }
 
     private fun planUniqueConstraint(

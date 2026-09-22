@@ -16,7 +16,7 @@ import org.jetbrains.exposed.v1.jdbc.update as jdbcUpdate
 /** Writable KEEP table whose primary key is a client-generated UUIDv7. */
 abstract class UuidDataTable<D : UuidData>(
     name: String,
-) : UuidDataTuple<D>(name, managedColumns = setOf("id")), DataTableSchemaHooks {
+) : UuidDataTuple<D>(name, managedColumns = setOf("id")), DataTableSchema {
 
     override val id: Column<UUID> = javaUUID("id").clientDefault(::uuidV7)
 
@@ -163,9 +163,4 @@ abstract class UuidDataTable<D : UuidData>(
     fun <T> deleteByColumnValue(value: T, column: Column<T>): Int =
         deleteWhere { (column as Column<Any?>) eq (value as Any?) }
 
-    override val postSchemaCreateSql: List<String> = emptyList()
-
-    override val customTypes: List<String> = emptyList()
-
-    override val customIndices: List<String> = emptyList()
 }
