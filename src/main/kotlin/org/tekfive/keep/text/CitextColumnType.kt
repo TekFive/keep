@@ -15,6 +15,9 @@ class CitextColumnType(val colLength: Int = Int.MAX_VALUE) : ColumnType<String>(
 
     override fun sqlType(): String = "CITEXT"
 
+    // JDBC binds strings as VARCHAR, which otherwise selects case-sensitive text equality.
+    override fun parameterMarker(value: String?): String = "?::citext"
+
     override fun valueFromDB(value: Any): String = when (value) {
         is String -> value
         is Clob -> value.characterStream.readText()
