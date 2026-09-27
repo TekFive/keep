@@ -2,6 +2,8 @@ package org.tekfive.keep.data
 
 import org.tekfive.keep.schema.postgresObjects
 import org.tekfive.keep.array.setArray
+import org.tekfive.keep.schema.view
+import org.jetbrains.exposed.v1.jdbc.select
 
 // ---------------------------------------------------------------------------
 // Shared test Data classes and DataTable definitions.
@@ -113,6 +115,9 @@ class SimpleViewData(val name: String, var score: Int) : Data()
 object SimpleView : DataView<SimpleViewData>("simple_view") {
     val name = varchar("name", 255)
     val score = integer("score")
+    override val viewDefinition = view(SimpleTable) {
+        SimpleTable.select(SimpleTable.id, SimpleTable.name, SimpleTable.score)
+    }
 }
 
 // -- Foreign key scenario -----------------------------------------------------

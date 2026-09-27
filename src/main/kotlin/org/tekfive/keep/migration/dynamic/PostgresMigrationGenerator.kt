@@ -23,7 +23,6 @@ import org.tekfive.keep.schema.PostgresExpressionConstraintDefinition
 import org.tekfive.keep.schema.PostgresExclusionConstraintDefinition
 import org.tekfive.keep.schema.creationOrder
 import org.tekfive.keep.schema.validateSharedDefinitions
-import org.tekfive.keep.schema.PostgresViewDefinition
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.sql.Connection
@@ -34,9 +33,9 @@ import java.util.UUID
  * Produces PostgreSQL SQL by comparing a [KeepSchema] with the current database schema.
  *
  * Planning reads PostgreSQL metadata and creates short-lived temporary objects to canonicalize
- * types and view queries. Missing extensions and pending column renames are simulated inside a
- * savepoint and rolled back before returning, including on failure. Simulation requires extension
- * installation privileges and, for renames, ALTER privileges and table locks. The returned plan
+ * types and view queries. Missing extensions, pending column renames, and the table/view changes
+ * needed to compare view output are simulated inside savepoints and rolled back before returning,
+ * including on failure. Simulation requires DDL privileges and can take table/view locks. The returned plan
  * includes extensions and renames followed by the remaining changes; none are committed here.
  */
 object PostgresMigrationGenerator {
@@ -120,30 +119,6 @@ object PostgresMigrationGenerator {
                 candidates += candidate(CreateSequence(QualifiedName(sequenceName, keepSchema.schemaName)))
             }
 
-        val existingViews = inventory.filter { it.kind.isView }.associateBy { it.name }
-        val desiredViewNames = keepSchema.views.mapTo(mutableSetOf()) { it.name }
-
-        val extraMaterializedViews = existingViews.values
-            .filter { it.name !in desiredViewNames && it.kind == ExistingObjectKind.MATERIALIZED_VIEW }
-            .map { it.name }
-        extraMaterializedViews.distinct().sorted().forEach { name ->
-            candidates += candidate(DropMaterializedView(QualifiedName(name, keepSchema.schemaName)))
-        }
-
-        val extraViews = existingViews.values
-            .filter { it.name !in desiredViewNames && it.kind == ExistingObjectKind.VIEW }
-            .map { it.name }
-        extraViews.distinct().sorted().forEach { name ->
-            candidates += candidate(DropView(QualifiedName(name, keepSchema.schemaName)))
-        }
-
-        val viewPlans = keepSchema.views.map { desired ->
-            planView(connection, keepSchema.schemaName, desired, existingViews[desired.name])
-        }
-        // The caller supplies views in dependency order: drop in reverse, recreate in forward order.
-        viewPlans.asReversed().forEach { candidates += it.beforeTables }
-        val postTableViewStatements = viewPlans.flatMap { it.afterTables }
-
         val (foreignKeyDrops, foreignKeyAdds) = planForeignKeys(connection, keepSchema)
         foreignKeyDrops.forEach { candidates += candidate(it) }
         val indexes = planIndexes(connection, keepSchema)
@@ -179,8 +154,6 @@ object PostgresMigrationGenerator {
         indexes.creates.forEach { candidates += candidate(it) }
         constraintAdds.forEach { candidates += candidate(it) }
         foreignKeyAdds.forEach { candidates += candidate(it) }
-
-        candidates += postTableViewStatements
 
         val desiredTableNames = keepSchema.tables.mapTo(mutableSetOf()) { it.nameInDatabaseCaseUnquoted() }
         val extraOrdinaryTables = inventory
@@ -222,7 +195,7 @@ object PostgresMigrationGenerator {
         val suppressed = mutableListOf<SuppressedPostgresMigrationStatement>()
         candidates.forEach { planned ->
             val statement = planned.statement
-            val destructiveChange = planned.forcedDestructiveChange ?: statement.destructiveChange
+            val destructiveChange = statement.destructiveChange
             if (nonDestructive && destructiveChange != null) {
                 suppressed += SuppressedPostgresMigrationStatement(statement, destructiveChange)
             } else {
@@ -230,7 +203,12 @@ object PostgresMigrationGenerator {
             }
         }
 
-        return PostgresMigrationPlan(executable.distinct(), suppressed.distinct())
+        val views = planViews(connection, keepSchema, executable, nonDestructive)
+        // Drop dependent views before table changes, and recreate them after all prerequisites.
+        return PostgresMigrationPlan(
+            (views.drops + executable + views.creates).distinct(),
+            (suppressed + views.suppressed).distinct(),
+        )
     }
 
     private fun retainedColumnNullabilityStatements(
@@ -406,88 +384,6 @@ object PostgresMigrationGenerator {
         it.writeTo(output, overwrite)
     }
 
-    private fun planView(
-        connection: Connection,
-        schema: String,
-        desired: PostgresViewDefinition,
-        existing: ExistingObject?,
-    ): ViewPlan {
-        val qualifiedName = qualifiedName(schema, desired.name)
-        val create = if (desired.materialized) {
-            CreateMaterializedView(QualifiedName(desired.name, schema), SqlQuery(desired.query.withoutTrailingSemicolon()))
-        } else {
-            CreateView(QualifiedName(desired.name, schema), SqlQuery(desired.query.withoutTrailingSemicolon()))
-        }
-        if (existing == null) return ViewPlan(afterTables = listOf(candidate(create)))
-
-        val desiredKind = if (desired.materialized) {
-            ExistingObjectKind.MATERIALIZED_VIEW
-        } else {
-            ExistingObjectKind.VIEW
-        }
-        val desiredDefinition = canonicalizeViewQuery(connection, desired.query)
-        val existingDefinition = readCanonicalView(connection, qualifiedName)
-        if (existing.kind == desiredKind && existingDefinition == desiredDefinition) return ViewPlan()
-
-        if (existing.kind == ExistingObjectKind.VIEW && desiredKind == ExistingObjectKind.VIEW) {
-            if (existingDefinition.columns == desiredDefinition.columns) {
-                return ViewPlan(
-                    afterTables = listOf(
-                        candidate(CreateOrReplaceView(QualifiedName(desired.name, schema), SqlQuery(desired.query.withoutTrailingSemicolon())))
-                    )
-                )
-            }
-        }
-
-        val dropChange = when (existing.kind) {
-            ExistingObjectKind.VIEW -> DestructivePostgresMigrationChange.DROP_VIEW
-            ExistingObjectKind.MATERIALIZED_VIEW -> DestructivePostgresMigrationChange.DROP_MATERIALIZED_VIEW
-            else -> error("Expected a view but found ${existing.kind}")
-        }
-        val drop = when (existing.kind) {
-            ExistingObjectKind.VIEW -> DropView(QualifiedName(desired.name, schema))
-            ExistingObjectKind.MATERIALIZED_VIEW -> DropMaterializedView(QualifiedName(desired.name, schema))
-        }
-        return ViewPlan(
-            beforeTables = listOf(candidate(drop)),
-            // Re-creation cannot run unless the destructive replacement step is also allowed.
-            afterTables = listOf(CandidateStatement(create, dropChange)),
-        )
-    }
-
-    private fun canonicalizeViewQuery(connection: Connection, query: String): CanonicalView {
-        val cleanQuery = query.withoutTrailingSemicolon()
-        require(cleanQuery.isNotBlank()) { "View query must not be blank" }
-
-        val temporaryName = "keep_view_${UUID.randomUUID().toString().replace("-", "")}"
-        var created = false
-        try {
-            connection.createStatement().use { statement ->
-                statement.execute("CREATE TEMPORARY VIEW ${quoteIdentifier(temporaryName)} AS $cleanQuery")
-                created = true
-            }
-            return readCanonicalView(connection, "pg_temp.${quoteIdentifier(temporaryName)}")
-        } finally {
-            if (created) {
-                connection.createStatement().use { statement ->
-                    statement.execute("DROP VIEW pg_temp.${quoteIdentifier(temporaryName)}")
-                }
-            }
-        }
-    }
-
-    private fun readCanonicalView(connection: Connection, regclassName: String): CanonicalView {
-        val definition = connection.prepareStatement("SELECT pg_get_viewdef(?::regclass, true)").use { statement ->
-            statement.setString(1, regclassName)
-            statement.executeQuery().use { result ->
-                check(result.next()) { "PostgreSQL did not return a view definition for $regclassName" }
-                normalizeViewQuery(result.getString(1))
-            }
-        }
-        val columns = readRelationColumns(connection, regclassName)
-        return CanonicalView(definition, columns)
-    }
-
     private fun readRelationColumns(connection: Connection, regclassName: String): List<RelationColumn> =
         connection.prepareStatement(
             """
@@ -513,14 +409,13 @@ object PostgresMigrationGenerator {
         keepSchema.validateSharedDefinitions()
         validateIdentifier(keepSchema.schemaName, "schema")
         keepSchema.extensions.forEach { validateIdentifier(it, "extension") }
-        keepSchema.views.forEach {
+        keepSchema.declaredViews.forEach {
             validateIdentifier(it.name, "view")
-            require(it.query.withoutTrailingSemicolon().isNotBlank()) { "View ${it.name} has a blank query" }
         }
         keepSchema.declaredSequenceNames.forEach { validateIdentifier(it, "sequence") }
 
         val tableNames = keepSchema.tables.map { it.tableName.substringAfterLast('.').trim('"') }
-        val allNames = tableNames + keepSchema.views.map { it.name } + keepSchema.declaredSequenceNames
+        val allNames = tableNames + keepSchema.declaredViews.map { it.name } + keepSchema.declaredSequenceNames
         val duplicates = allNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
         require(duplicates.isEmpty()) {
             "PostgreSQL tables, views, and sequences share a namespace; duplicate KeepSchema names: $duplicates"
@@ -815,7 +710,7 @@ object PostgresMigrationGenerator {
                 "KeepSchema table $name conflicts with existing PostgreSQL ${existing.kind.description}"
             }
         }
-        keepSchema.views.forEach { view ->
+        keepSchema.declaredViews.forEach { view ->
             val existing = existingByName[view.name] ?: return@forEach
             require(existing.kind.isView) {
                 "KeepSchema view ${view.name} conflicts with existing PostgreSQL ${existing.kind.description}"
@@ -897,22 +792,8 @@ object PostgresMigrationGenerator {
 
     private fun quoteIdentifier(identifier: String): String = "\"${identifier.replace("\"", "\"\"")}\""
 
-    private fun normalizeViewQuery(query: String?): String = query
-        .orEmpty()
-        .withoutTrailingSemicolon()
-        .replace(WHITESPACE, " ")
-        .trim()
-
-    private fun String.withoutTrailingSemicolon(): String = trim().trimEnd(';').trimEnd()
-
     private data class CandidateStatement(
         val statement: PostgresMigrationStatement,
-        val forcedDestructiveChange: DestructivePostgresMigrationChange? = null,
-    )
-
-    private data class ViewPlan(
-        val beforeTables: List<CandidateStatement> = emptyList(),
-        val afterTables: List<CandidateStatement> = emptyList(),
     )
 
     private data class ExistingObject(
@@ -920,11 +801,6 @@ object PostgresMigrationGenerator {
         val kind: ExistingObjectKind,
         val isPartition: Boolean,
         val ownedByTable: Boolean,
-    )
-
-    private data class CanonicalView(
-        val query: String,
-        val columns: List<RelationColumn>,
     )
 
     private data class RelationColumn(
@@ -977,7 +853,6 @@ object PostgresMigrationGenerator {
     private const val TRIGGER_TYPE_INSERT = 4
     private const val TRIGGER_TYPE_DELETE = 8
     private const val TRIGGER_TYPE_UPDATE = 16
-    private val WHITESPACE = Regex("\\s+")
 }
 
 private fun String.normalizedFunctionBody(): String =

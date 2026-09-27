@@ -262,7 +262,7 @@ class PostgresMigrationGeneratorTest {
     }
 
     @Test
-    fun `view shape changes require destructive mode`() {
+    fun `ordinary view shape changes are replaced in non-destructive mode`() {
         transaction(database) {
             exec("CREATE TABLE $GENERATOR_SCHEMA.widgets (id BIGINT PRIMARY KEY, relaxed TEXT)")
             exec(
@@ -280,14 +280,9 @@ class PostgresMigrationGeneratorTest {
         )
 
         val safePlan = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = true)
-        assertFalse(safePlan.sqlStatements.any { it.contains("VIEW", ignoreCase = true) })
-        assertEquals(
-            listOf(
-                DestructivePostgresMigrationChange.DROP_VIEW,
-                DestructivePostgresMigrationChange.DROP_VIEW,
-            ),
-            safePlan.suppressedStatements.map { it.reason },
-        )
+        assertEquals(listOf(DropView::class, CreateView::class),
+            safePlan.statements.filter { it is DropView || it is CreateView }.map { it::class })
+        assertTrue(safePlan.suppressedStatements.isEmpty())
 
         val destructivePlan = PostgresMigrationGenerator.plan(database, changedSchema, nonDestructive = false)
         val viewStatements = destructivePlan.sqlStatements.filter { it.contains("VIEW", ignoreCase = true) }

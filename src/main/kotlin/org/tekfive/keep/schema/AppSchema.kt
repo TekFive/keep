@@ -51,6 +51,10 @@ abstract class AppSchema(
             .sortedBy { it.creationOrder }
             .flatMap { it.createStatements(postgresContext) }
             .forEach { sql -> TransactionManager.current().exec(sql) }
+        orderedViews().forEach { view ->
+            val create = if (view.materialized) "CREATE MATERIALIZED VIEW" else "CREATE VIEW"
+            TransactionManager.current().exec("$create ${postgresContext.qualified(view.name)} AS ${view.renderQuery()}")
+        }
     }
 
     /** Creates extensions and only the tables that do not already exist. Must be called within a transaction. */
@@ -67,6 +71,11 @@ abstract class AppSchema(
 
     /** Drops all tables in reverse order using [SchemaUtils.drop]. Must be called within a transaction. */
     fun drop() {
+        val context = PostgresRenderContext(schemaName)
+        orderedViews().asReversed().forEach { view ->
+            val drop = if (view.materialized) "DROP MATERIALIZED VIEW" else "DROP VIEW"
+            TransactionManager.current().exec("$drop IF EXISTS ${context.qualified(view.name)}")
+        }
         SchemaUtils.drop(*tables.reversed().toTypedArray())
     }
 

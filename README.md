@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.30")
+implementation("com.github.TekFive:keep:v1.0.31")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -629,11 +629,67 @@ available. Existing extensions are neither upgraded nor relocated automatically.
 
 `KeepSchema` is authoritative for its PostgreSQL schema. Destructive mode can remove ordinary tables, views, materialized views, standalone sequences, and columns not declared by it. PostgreSQL-owned sequences for serial and identity columns remain managed by their tables.
 
-With `nonDestructive = true`, KEEP suppresses statements that can remove stored data or schema objects, including table, column, view, materialized-view, and sequence drops as well as column type rewrites, `DELETE`, and `TRUNCATE`. Non-data-removing changes remain available, including adding objects, dropping indexes or constraints, and relaxing a column with `DROP NOT NULL`. Suppressed statements are returned separately and are not written into the executable SQL file.
+With `nonDestructive = true`, KEEP suppresses statements that can remove stored data or undeclared schema objects, including table, column, undeclared-view, materialized-view, and sequence drops as well as column type rewrites, `DELETE`, and `TRUNCATE`. Structural replacement of a declared ordinary view is allowed because it stores no rows. Non-data-removing changes remain available, including adding objects, dropping indexes or constraints, and relaxing a column with `DROP NOT NULL`. Suppressed statements are returned separately and are not written into the executable SQL file.
 
 When a column is removed from a declared table, a non-destructive plan retains the database column and its existing values, but removes its `NOT NULL` constraint so new inserts can omit it. Already-nullable columns require no change. PostgreSQL restrictions still apply to columns whose nullability is required by a primary key or identity; those need an explicit migration of the dependent definition.
 
-Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`. A view definition includes its defining `SELECT`, and views should be listed in dependency order. Compatible changes use `CREATE OR REPLACE VIEW`, while output-shape changes and materialized-view replacements require destructive mode.
+Table objects without an explicit schema use PostgreSQL's current schema, which must match `KeepSchema.schemaName`.
+
+`DataView` and `UuidDataView` require a `viewDefinition` declared in the view itself.
+Register the view objects directly in `KeepSchema.views`:
+
+```kotlin
+class UserViewData(val email: String) : Data()
+
+object AllUsers : DataView<UserViewData>("app.all_users") {
+    val email = text("email")
+
+    override val viewDefinition by lazy {
+        view(UsersTable, ArchivedUsersTable) {
+            UsersTable.select(UsersTable.id, UsersTable.email).unionAll(
+                ArchivedUsersTable.select(ArchivedUsersTable.id, ArchivedUsersTable.email),
+            )
+        }
+    }
+}
+
+object UserSchema : KeepSchema("app") {
+    override val tables = listOf(UsersTable, ArchivedUsersTable)
+    override val views = listOf(AllUsers)
+}
+```
+
+Use `UuidData` with `UuidDataView` for UUID IDs. Existing mapped view subclasses must now
+implement `viewDefinition`; omitting it is a compile-time error. The definition must use the
+mapping's own name and schema. Keep view objects out of `KeepSchema.tables`.
+Standalone `postgresView(name, sources...) { query }` definitions can also be included in
+`views`, alongside mapped view objects. Plain Exposed `Table` mappings can use
+`mapping.view(sources...) { query }` to produce a standalone definition.
+
+Import `org.tekfive.keep.schema.view` / `postgresView` and Exposed's JDBC `select`, `union`,
+or `unionAll` functions. Both `UNION` (deduplicated) and `UNION ALL` (duplicates retained) work,
+along with joins, aliases, filters, and other Exposed query expressions. Query factories render
+literal SQL when generating a plan; do not execute queries or perform other side effects inside them.
+The query determines the view's output columns; use aliases when their names differ from the mapping.
+List every source table or view, including sources in subqueries and every union branch. Sources
+must be declared in the same `KeepSchema`. View dependencies determine creation order automatically.
+Raw SQL `PostgresViewDefinition(name, query, references = listOf(...))` remains supported;
+without references, list raw SQL views in dependency order for fresh installation.
+
+Fresh installation and `AppSchema.create()` create views after tables and constraints;
+`AppSchema.drop()` removes views before tables. Dynamic comparison checks PostgreSQL-normalized
+queries and ordered output column names, types, and collations. Matching views are untouched.
+Query-only changes with identical output structure use `CREATE OR REPLACE VIEW`. Structural
+changes drop dependent views first and recreate them in dependency order, including in
+non-destructive mode. Such replacements remove view-specific grants and other metadata;
+query-only replacements retain them. Dependencies outside the managed schema are never cascaded.
+
+Set `materialized = true` to declare a materialized view. Replacing one requires destructive mode;
+if a materialized dependent prevents an ordinary view from being rebuilt, the entire affected
+replacement is suppressed together. Planning validates view definitions against pending table
+changes inside savepoints and always rolls back, including on failure. This briefly takes DDL
+locks; materialized view queries are not executed during planning. Execute the returned plan
+with its default transactional executor to apply replacements atomically.
 
 Changing an existing identity column between an integer and UUID is intentionally not generated. That conversion requires an additive, application-specific migration that creates and backfills new primary-key and foreign-key columns before swapping them; KEEP reports this case instead of emitting an invalid PostgreSQL cast.
 

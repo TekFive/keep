@@ -8,8 +8,8 @@ import org.tekfive.keep.data.TypedDataTuple
  * The application-owned PostgreSQL objects that KEEP should manage.
  *
  * Tables, extensions, views, materialized views, standalone sequences, and ordered SQL hooks
- * declared here form the authoritative desired state for [schemaName]. Views must be listed in
- * dependency order so base views are created before views that reference them.
+ * declared here form the authoritative desired state for [schemaName]. View references determine
+ * dependency order; raw SQL views without references must be listed in dependency order.
  */
 abstract class KeepSchema(
     val schemaName: String = "public",
@@ -22,7 +22,26 @@ abstract class KeepSchema(
     /** Schema-owned types shared by any number of tables. */
     open val types: List<PostgresTypeDefinition> = emptyList()
 
-    open val views: List<PostgresViewDefinition> = emptyList()
+    /** Mapped views with their own definitions, or standalone [PostgresViewDefinition] entries. */
+    open val views: List<PostgresView> = emptyList()
+
+    /** Effective definitions used by fresh installation and dynamic migration. */
+    val declaredViews: List<PostgresViewDefinition>
+        get() = views.map { view ->
+            val definition = view.viewDefinition
+            if (view is Table) {
+                val mappedName = view.tableName.substringAfterLast('.').removeSurrounding("\"")
+                require(definition.name == mappedName) {
+                    "View ${view.tableName} declares a definition for ${definition.name}"
+                }
+                val mappedSchema = view.schemaName?.removeSurrounding("\"")
+                require(mappedSchema == null || mappedSchema == schemaName) {
+                    "View ${view.tableName} belongs to a different schema than $schemaName"
+                }
+                require(view !in tables) { "View ${view.tableName} belongs in KeepSchema.views, not tables" }
+            }
+            definition
+        }
 
     open val sequenceNames: List<String> = emptyList()
 

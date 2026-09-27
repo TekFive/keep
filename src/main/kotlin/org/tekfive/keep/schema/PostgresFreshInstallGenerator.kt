@@ -45,10 +45,10 @@ object PostgresFreshInstallGenerator {
                 .flatMap { it.createStatements(postgresContext) }
             statements += keepSchema.afterTablesSql
 
-            keepSchema.views.forEach { view ->
+            keepSchema.orderedViews().forEach { view ->
                 val create = if (view.materialized) "CREATE MATERIALIZED VIEW" else "CREATE VIEW"
                 statements += "$create ${qualifiedName(keepSchema.schemaName, view.name)} AS " +
-                    view.query.withoutTrailingSemicolon()
+                    view.renderQuery()
             }
 
             PostgresFreshInstallPlan(
@@ -119,16 +119,15 @@ object PostgresFreshInstallGenerator {
         require(keepSchema.schemaName.isNotBlank()) { "KeepSchema schemaName must not be blank" }
         validateNames("extension", keepSchema.extensions)
         validateNames("sequence", keepSchema.sequenceDefinitions.map { it.name })
-        validateNames("view", keepSchema.views.map { it.name })
+        validateNames("view", keepSchema.declaredViews.map { it.name })
         require(keepSchema.sequenceDefinitions.none { '.' in it.name }) {
             "Sequence definitions must use unqualified names; KeepSchema supplies the schema"
         }
-        require(keepSchema.views.none { '.' in it.name }) {
+        require(keepSchema.declaredViews.none { '.' in it.name }) {
             "View definitions must use unqualified names; KeepSchema supplies the schema"
         }
         require(keepSchema.beforeTablesSql.all(String::isNotBlank)) { "beforeTablesSql must not contain blank SQL" }
         require(keepSchema.afterTablesSql.all(String::isNotBlank)) { "afterTablesSql must not contain blank SQL" }
-        require(keepSchema.views.all { it.query.isNotBlank() }) { "View queries must not be blank" }
 
         val postgresObjects = keepSchema.declaredPostgresObjects
         require(postgresObjects.all { it.table in keepSchema.tables }) {
@@ -179,7 +178,7 @@ object PostgresFreshInstallGenerator {
 
         val objectNames = buildList {
             addAll(keepSchema.tables.map { it.tableName.substringAfterLast('.').trimIdentifierQuotes() })
-            addAll(keepSchema.views.map { it.name.trimIdentifierQuotes() })
+            addAll(keepSchema.declaredViews.map { it.name.trimIdentifierQuotes() })
             addAll(keepSchema.sequenceDefinitions.map { it.name.substringAfterLast('.').trimIdentifierQuotes() })
         }
         val duplicates = objectNames.groupBy { it.lowercase(Locale.ROOT) }
