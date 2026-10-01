@@ -52,7 +52,7 @@ internal fun planIndexes(connection: Connection, schema: KeepSchema): IndexPlan 
 
 private data class IndexShape(
     val method: String, val unique: Boolean, val keys: List<String>, val include: List<String>,
-    val predicate: String?, val nullsNotDistinct: Boolean,
+    val predicate: String?, val nullsNotDistinct: Boolean, val operatorClasses: List<String>,
 )
 private data class ExistingIndex(val shape: IndexShape, val valid: Boolean, val constraint: Boolean)
 
@@ -84,7 +84,8 @@ private fun readIndexes(connection: Connection, table: String): Map<String, Exis
            ${if (connection.metaData.databaseMajorVersion >= 15) "i.indnullsnotdistinct" else "FALSE"}, i.indisvalid,
            EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid),
            EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = i.indexrelid
-                   AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e')
+                   AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e'),
+           i.indclass::oid[]
     FROM pg_index i JOIN pg_class ci ON ci.oid = i.indexrelid JOIN pg_am am ON am.oid = ci.relam
     WHERE i.indrelid = to_regclass(?)
     """.trimIndent()
@@ -96,7 +97,9 @@ private fun readIndexes(connection: Connection, table: String): Map<String, Exis
                 if (result.getBoolean(10)) continue
                 put(result.getString(1), ExistingIndex(IndexShape(result.getString(2), result.getBoolean(3),
                     (result.getArray(4).array as Array<*>).map { it.toString() },
-                    (result.getArray(5).array as Array<*>).map { it.toString() }, result.getString(6), result.getBoolean(7)),
+                    (result.getArray(5).array as Array<*>).map { it.toString() }, result.getString(6), result.getBoolean(7),
+                    // pg_get_indexdef(index, column, ...) omits the operator class; compare it explicitly.
+                    (result.getArray(11).array as Array<*>).map { it.toString() }),
                     result.getBoolean(8), result.getBoolean(9)))
             }
         }

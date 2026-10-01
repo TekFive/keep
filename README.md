@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.31")
+implementation("com.github.TekFive:keep:v1.0.32")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -307,6 +307,47 @@ db {
 ```
 
 For lower-level work, KEEP also exposes helpers such as `dbConnection()`, `dbCommit()`, `rollback()`, `inDbTransaction()`, and `dbTransactionAt()`.
+
+
+### Entire-table Caches
+
+`DatabaseTableCache<D>` and `UuidDatabaseTableCache<D>` cache an entire table in one snapshot,
+optionally restricted by a `cachePredicate`. They suit small reference tables that fit in memory.
+Unlike `DatabaseTupleCache` and `UuidDatabaseTupleCache`, reads load all selected rows together:
+
+```kotlin
+object CountriesCache : DatabaseTableCache<CountryData>(CountriesTable) {}
+
+val countries = CountriesCache.findAll()
+val country = CountriesCache[countryId]          // Throws if absent.
+val optionalCountry = CountriesCache.find(countryId)
+val count = CountriesCache.size
+CountriesCache.refresh()                       // Reload immediately.
+CountriesCache.invalidate()                    // Reload on the next read.
+CountriesCache.clear()                         // Alias for invalidate().
+```
+
+For UUID tables, extend `UuidDatabaseTableCache<MyUuidData>(MyUuidTable)` instead. Both wrappers
+share `TypedDatabaseTableCache<ID, D>`. Supply `cachePredicate = CountriesTable.active eq true`
+to cache a filtered selection. The default loader orders rows by ID.
+
+`maxCacheSeconds` defaults to Ack configuration `TABLE_CACHE_<TABLE_NAME>_MAX_CACHE_SECONDS`,
+with a fallback of **300 seconds**. The table name includes its schema when specified, is uppercased,
+and has quotes removed and punctuation replaced with underscores. For example, `countries` uses
+`TABLE_CACHE_COUNTRIES_MAX_CACHE_SECONDS`; `app.countries` uses
+`TABLE_CACHE_APP_COUNTRIES_MAX_CACHE_SECONDS`. The setting is exposed as
+`maxCacheSecondsProperty`. You can still override `maxCacheSeconds` in a subclass.
+
+The first read loads the snapshot. Empty results and absent IDs stay cached until the snapshot
+expires or is invalidated. Expiration starts when loading finishes and does not extend on reads;
+`maxCacheSeconds <= 0` disables retention. Concurrent initial or expired reads share one load,
+and refresh replaces the complete snapshot atomically. Failed loads throw without publishing
+partial results; expired snapshots are not served as a fallback.
+
+Returned lists are unmodifiable, but the contained data objects are shared and may be mutable.
+These caches are local to each application instance and have no automatic write invalidation.
+Database loads join the caller's transaction; refresh or invalidate after a successful commit,
+and avoid loading uncommitted changes into a shared cache.
 
 ### PostgreSQL Extensions
 
