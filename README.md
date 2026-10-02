@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.33")
+implementation("com.github.TekFive:keep:v1.0.34")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -100,6 +100,31 @@ val patient = PatientsTable.create(
 patient.displayName = "Ada Byron"
 PatientsTable.update(patient)
 ```
+
+To customize inherited reads, override `createQuery()` in a tuple, table, view, or an intermediate
+base class. For example, this table's lookup methods only return active patients:
+
+```kotlin
+import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.jdbc.Query
+import org.jetbrains.exposed.v1.jdbc.andWhere
+
+// Inside PatientsTable:
+override fun createQuery(): Query = super.createQuery().andWhere { active eq true }
+```
+
+All inherited lookups (`getById`, `findById`, `findByIds`, both `findByUnique` overloads,
+`findAll`, `findWhere`, and `findPaged`), counts, and existence checks use this query. This works
+through both the Long and UUID hierarchies, including `DataView` and `UuidDataView`. Additional
+predicates are combined with the query's existing filter using `AND`. Overrides can also return
+joined queries; select the tuple's `id` and all columns required by its `map()` implementation.
+ID lookups assume one result per ID.
+
+Return a fresh `Query` on each call because the helpers add predicates, ordering, and pagination.
+The hook runs inside a database transaction when a query is needed. Transaction-cached ID
+lookups can reuse earlier results, so keep the query scope stable within a cached transaction,
+or use `db(cache = false)` at the outermost level. Explicit Exposed queries such as `selectAll()`
+and write operations retain their existing behavior.
 
 Columns can also be configured directly from Kotlin property references. `column` derives
 the PostgreSQL column name (`displayName` becomes `display_name`), chooses the column type, and
@@ -544,6 +569,33 @@ Delete handlers expose only `old`, insert handlers expose only `new`, and update
 both. `immutableWhen` uses PostgreSQL's null-safe `IS DISTINCT FROM` row comparison. The DSL
 generates and orders the PL/pgSQL function and trigger automatically; `sql(...)` is available as
 an explicit escape hatch inside a handler.
+
+To delete a referenced parent when its child row is deleted, chain `cascadeDeleteParent()` onto
+a foreign-key column on a `DataTable` or `UuidDataTable`:
+
+```kotlin
+val attachmentId = fkey(
+    Document::attachmentId,
+    AttachmentsTable,
+    onDelete = ReferenceOption.NO_ACTION,
+).cascadeDeleteParent()
+```
+
+KEEP registers an `AFTER DELETE` row trigger using the foreign key's target table and column.
+It works for nullable and non-nullable keys, including Long and UUID, and preserves the column's
+property mapping. Null keys are skipped. Deletion runs in the same transaction as the child
+deletion, including deletes issued outside KEEP. Generated trigger and function names are
+deterministic and fit PostgreSQL's identifier limit; use `cascadeDeleteParent(triggerName = "...")`
+to choose the trigger name.
+
+The existing FK delete action is preserved. `fkey()` defaults to `CASCADE`, so omitting
+`onDelete = ReferenceOption.NO_ACTION` enables deletion in both directions. The helper always
+attempts to delete the parent; any other referencing rows apply their normal FK actions, which
+can reject the deletion or cascade further. It does not check whether the parent is orphaned.
+Composite or ambiguous foreign keys are rejected.
+
+The same typed operation is available in an explicit `rowTrigger` delete handler:
+`after(PostgresTriggerEvent.DELETE)` with `onDelete { deleteReferencedRow(attachmentId) }`.
 
 Typed objects participate in fresh-install generation, `AppSchema.create()`, and migration
 comparison. KEEP creates missing objects and replaces changed unique constraints, trigger

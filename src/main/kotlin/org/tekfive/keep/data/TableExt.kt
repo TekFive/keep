@@ -14,7 +14,11 @@ import kotlin.reflect.KProperty1
 
 /** Creates an indexed long column that references [target]'s `id` as a named foreign key. */
 fun Table.fkey(name: String, target: DataTable<*>, onDelete: ReferenceOption = ReferenceOption.CASCADE): Column<Long> {
-    return long(name).references(target.id, fkName = "${tableName}_${name}_fk", onDelete = onDelete).indexWithStandardName()
+    return long(name).references(
+        target.id,
+        fkName = "${tableName.substringAfterLast('.').removeSurrounding("\"")}_${name}_fk",
+        onDelete = onDelete,
+    ).indexWithStandardName()
 }
 
 /** Creates an indexed long foreign key whose name is derived from [property]. */
@@ -44,7 +48,7 @@ fun Table.uuidFkey(
     name = name,
     refColumn = target.id,
     onDelete = onDelete,
-    fkName = "${tableName}_${name}_fk",
+    fkName = "${tableName.substringAfterLast('.').removeSurrounding("\"")}_${name}_fk",
 ).indexWithStandardName()
 
 /** UUID overload of [fkey]. */

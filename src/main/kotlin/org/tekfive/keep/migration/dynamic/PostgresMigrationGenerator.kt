@@ -139,6 +139,13 @@ object PostgresMigrationGenerator {
                 candidates += candidate(it)
             }
             exposedTableStatements
+                // Exposed can report qualified shared sequences as missing. An IF NOT EXISTS
+                // creation has no effect when PostgreSQL's schema inventory already contains it.
+                .filterNot {
+                    it is CreateSequence && it.ifNotExists &&
+                        (it.name.schema == null || it.name.schema == keepSchema.schemaName) &&
+                        it.name.name in existingSequenceNames
+                }
                 // PostgreSQL-native comparison below replaces Exposed's incomplete type detection.
                 .filterNot { it is AlterColumnType }
                 .filterNot { it is DropIndex && (it.name.name in ownedIndexNames || indexes.drops.any { drop -> drop.name.name == it.name.name }) }

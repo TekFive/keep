@@ -8,6 +8,8 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.jdbc.Query
+import org.jetbrains.exposed.v1.jdbc.andWhere
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.tekfive.keep.db.TransactionCache
 import org.tekfive.keep.db.db
@@ -310,20 +312,28 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
 
     private fun cacheKey(id: ID): Any = Pair(this, id)
 
-    @Suppress("UNCHECKED_CAST")
+    /**
+     * Creates the base query for every inherited lookup, count, and existence check.
+     * Called inside a database transaction when a query is needed; cached ID lookups may skip it.
+     * Override in any tuple, table, or view subclass to add joins, filters, or ordering.
+     *
+     * Return a fresh query each time. KEEP appends predicates with AND and may add ordering or
+     * pagination. Include [id] and every column required by [map] in the selected fields.
+     * ID lookups assume one result per [id]. Query scope must remain stable within a cached
+     * transaction; use `db(cache = false)` at the outermost level for changing scopes.
+     */
+    protected open fun createQuery(): Query = selectAll()
+
     open fun getById(id: ID): D {
         val cache = TransactionCache.current
         val key = cacheKey(id)
         cache?.get<D>(key)?.let { return it }
 
-        val pkColumn = primaryKey?.columns?.singleOrNull()
-            ?: throw IllegalStateException("getById requires a single-column primary key")
-        val result = db{ selectAll().where { (pkColumn as Column<Any?>) eq id }.single().let { map(it) } }
+        val result = db { createQuery().andWhere { this.id eq id }.single().let(::map) }
         cache?.put(key, result)
         return result
     }
 
-    @Suppress("UNCHECKED_CAST")
     open fun findById(id: ID?): D? {
         if (id == null) return null
         val key = cacheKey(id)
@@ -334,14 +344,10 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         return queryById(id)
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun queryById(id: ID): D? {
-        val pkColumn = primaryKey?.columns?.singleOrNull()
-            ?: throw IllegalStateException("findById requires a single-column primary key")
-        return db { selectAll().where { (pkColumn as Column<Any?>) eq id }.singleOrNull()?.let { map(it) } }
+        return db { createQuery().andWhere { this.id eq id }.singleOrNull()?.let(::map) }
     }
 
-    @Suppress("UNCHECKED_CAST")
     open fun findByIds(ids: List<ID>): List<D> {
         if (ids.isEmpty()) return emptyList()
 
@@ -359,14 +365,12 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         }
 
         if (uncachedIds.isNotEmpty()) {
-            val pkColumn = primaryKey?.columns?.singleOrNull()
-                ?: throw IllegalStateException("findByIds requires a single-column primary key")
             val fetchedById = mutableMapOf<ID, D>()
             val distinctUncachedIds = uncachedIds.distinct()
             db {
-                for (row in selectAll().where { (pkColumn as Column<Any?>) inList distinctUncachedIds }) {
+                for (row in createQuery().andWhere { id inList distinctUncachedIds }) {
                     val data = map(row)
-                    fetchedById[data.id] = data
+                    fetchedById[row[id]] = data
                 }
                 for (id in distinctUncachedIds) {
                     val data = fetchedById[id]
@@ -380,20 +384,18 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     }
 
 
-    @Suppress("UNCHECKED_CAST")
     open fun <T : Any> findByUnique(value: T?, column: Column<T>): D? {
         if (value == null) return null
-        return db { selectAll().where { (column as Column<Any?>) eq (value as Any?) }.singleOrNull()?.let { map(it) } }
+        return db { createQuery().andWhere { column eq value }.singleOrNull()?.let(::map) }
     }
 
-    @Suppress("UNCHECKED_CAST")
     open fun findByUnique(predicate: Op<Boolean>): D? {
-        return db { selectAll().where(predicate).singleOrNull()?.let { map(it) } }
+        return db { createQuery().andWhere { predicate }.singleOrNull()?.let(::map) }
     }
 
     open fun findAll(vararg order: Pair<Expression<*>, SortOrder>): List<D> {
         return db {
-            var query = selectAll()
+            var query = createQuery()
             if (order.isNotEmpty()) {
                 query = query.orderBy(*order)
             }
@@ -403,7 +405,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
 
     open fun findWhere(predicate: Op<Boolean>, vararg order: Pair<Expression<*>, SortOrder>): List<D> {
         return db {
-            var query = selectAll().where(predicate)
+            var query = createQuery().andWhere { predicate }
             if (order.isNotEmpty()) {
                 query = query.orderBy(*order)
             }
@@ -417,17 +419,17 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         page: Int,
         size: Int,
         vararg order: Pair<Expression<*>, SortOrder>,
-    ): PagedResult<D> {
+    ): PagedResult<D> = db {
         val total = count(predicate)
         val offset = (page - 1) * size
-        var query = selectAll().where(predicate)
+        var query = createQuery().andWhere { predicate }
         if (order.isNotEmpty()) query = query.orderBy(*order)
         val data = query.limit(size).offset(offset.toLong()).map(::map)
-        return PagedResult(data, total, page, size)
+        PagedResult(data, total, page, size)
     }
 
     open fun count(predicate: Op<Boolean>): Int {
-        return db { selectAll().where(predicate).count().toInt() }
+        return db { createQuery().andWhere { predicate }.count().toInt() }
     }
 
     open fun rowExists(predicate: Op<Boolean>): Boolean {

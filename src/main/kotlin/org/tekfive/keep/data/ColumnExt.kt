@@ -24,7 +24,8 @@ val Column<*>.maxLength: Int
     }
 
 
-fun <T> Column<T>.indexWithStandardName(): Column<T> = index("${table.tableName}_${name}_ix")
+fun <T> Column<T>.indexWithStandardName(): Column<T> =
+    index("${table.tableName.substringAfterLast('.').removeSurrounding("\"")}_${name}_ix")
 
 fun <T> Column<T>.uniqueIndexWithStandardName(): Column<T> = uniqueIndex("${table.tableName}_${name}_uq")
 

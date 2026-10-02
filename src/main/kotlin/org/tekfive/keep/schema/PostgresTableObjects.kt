@@ -323,6 +323,15 @@ class PostgresInsertTriggerScope internal constructor(table: Table) : PostgresTr
 
 class PostgresDeleteTriggerScope internal constructor(table: Table) : PostgresTriggerScope(table) {
     val old = PostgresTriggerRow(table, "OLD")
+
+    /** Deletes the row referenced by the deleted row's single-column foreign key; nulls are skipped. */
+    fun deleteReferencedRow(column: Column<*>) {
+        require(column.table === table) {
+            "Trigger on ${table.tableName} cannot reference ${column.table.tableName}.${column.name}"
+        }
+        column.referencedParentColumn()
+        statements += PostgresTriggerStatement.DeleteReferencedRow(column)
+    }
 }
 
 class PostgresUpdateTriggerScope internal constructor(table: Table) : PostgresTriggerScope(table) {
@@ -434,6 +443,21 @@ private class PostgresTriggerColumn<T>(
 internal sealed interface PostgresTriggerStatement {
     fun render(context: PostgresRenderContext): String
 
+    data class DeleteReferencedRow(val column: Column<*>) : PostgresTriggerStatement {
+        override fun render(context: PostgresRenderContext): String {
+            // Resolve from the final column definition, including nullable/transform replacements.
+            val target = column.referencedParentColumn()
+            val schema = target.table.tableName.substringBeforeLast('.', context.schemaName).removeSurrounding("\"")
+            val targetTable = "${context.identifier(schema)}.${context.identifier(target.table.unqualifiedName())}"
+            val oldValue = "OLD.${context.identifier(column.name)}"
+            return """
+                IF $oldValue IS NOT NULL THEN
+                    DELETE FROM $targetTable WHERE ${context.identifier(target.name)} = $oldValue;
+                END IF;
+            """.trimIndent()
+        }
+    }
+
     data class Require(
         val condition: Op<Boolean>,
         val message: String,
@@ -466,6 +490,18 @@ internal sealed interface PostgresTriggerStatement {
     data class Raw(val sql: String) : PostgresTriggerStatement {
         override fun render(context: PostgresRenderContext): String = sql
     }
+}
+
+private fun Column<*>.referencedParentColumn(): Column<*> {
+    val foreignKeys = table.foreignKeys.filter { key -> key.from.any { it.name == name } }
+    require(foreignKeys.size == 1) {
+        "Deleting a referenced row requires exactly one foreign key on ${table.tableName}.$name"
+    }
+    val key = foreignKeys.single()
+    require(key.from.size == 1) {
+        "Deleting a referenced row does not support composite foreign keys on ${table.tableName}.$name"
+    }
+    return key.references.values.single()
 }
 
 private fun Op<Boolean>.renderSql(): String = QueryBuilder(prepared = false).also { it.append(this) }.toString()
