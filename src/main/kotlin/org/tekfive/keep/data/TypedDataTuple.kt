@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Abstract base for table classes that automatically map between Exposed table columns and [Data]
  * subclass constructor properties. Explicit property references take precedence over table property names.
+ * Data lookup, count, existence, and row mapping methods are open for subclasses to customize.
  *
  * Data class hierarchies are supported. For example:
  * ```
@@ -299,7 +300,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         return constructor.callBy(args)
     }
 
-    fun mapOrNull(row: ResultRow): D? {
+    open fun mapOrNull(row: ResultRow): D? {
         return if (row.getOrNull(id) != null) {
             map(row)
         } else {
@@ -310,7 +311,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     private fun cacheKey(id: ID): Any = Pair(this, id)
 
     @Suppress("UNCHECKED_CAST")
-    fun getById(id: ID): D {
+    open fun getById(id: ID): D {
         val cache = TransactionCache.current
         val key = cacheKey(id)
         cache?.get<D>(key)?.let { return it }
@@ -323,7 +324,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun findById(id: ID?): D? {
+    open fun findById(id: ID?): D? {
         if (id == null) return null
         val key = cacheKey(id)
         val cache = TransactionCache.current
@@ -341,7 +342,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun findByIds(ids: List<ID>): List<D> {
+    open fun findByIds(ids: List<ID>): List<D> {
         if (ids.isEmpty()) return emptyList()
 
         val cache = TransactionCache.current
@@ -380,17 +381,17 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
 
 
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> findByUnique(value: T?, column: Column<T>): D? {
+    open fun <T : Any> findByUnique(value: T?, column: Column<T>): D? {
         if (value == null) return null
         return db { selectAll().where { (column as Column<Any?>) eq (value as Any?) }.singleOrNull()?.let { map(it) } }
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun findByUnique(predicate: Op<Boolean>): D? {
+    open fun findByUnique(predicate: Op<Boolean>): D? {
         return db { selectAll().where(predicate).singleOrNull()?.let { map(it) } }
     }
 
-    fun findAll(vararg order: Pair<Expression<*>, SortOrder>): List<D> {
+    open fun findAll(vararg order: Pair<Expression<*>, SortOrder>): List<D> {
         return db {
             var query = selectAll()
             if (order.isNotEmpty()) {
@@ -400,7 +401,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         }
     }
 
-    fun findWhere(predicate: Op<Boolean>, vararg order: Pair<Expression<*>, SortOrder>): List<D> {
+    open fun findWhere(predicate: Op<Boolean>, vararg order: Pair<Expression<*>, SortOrder>): List<D> {
         return db {
             var query = selectAll().where(predicate)
             if (order.isNotEmpty()) {
@@ -411,7 +412,7 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
     }
 
 
-    fun findPaged(
+    open fun findPaged(
         predicate: Op<Boolean>,
         page: Int,
         size: Int,
@@ -425,11 +426,11 @@ abstract class TypedDataTuple<ID : Any, D : IdentifiedData<ID>>(
         return PagedResult(data, total, page, size)
     }
 
-    fun count(predicate: Op<Boolean>): Int {
+    open fun count(predicate: Op<Boolean>): Int {
         return db { selectAll().where(predicate).count().toInt() }
     }
 
-    fun rowExists(predicate: Op<Boolean>): Boolean {
+    open fun rowExists(predicate: Op<Boolean>): Boolean {
         return count(predicate) > 0
     }
 

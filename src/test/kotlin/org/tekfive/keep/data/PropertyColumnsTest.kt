@@ -13,6 +13,7 @@ import org.tekfive.keep.schema.PostgresTargetVersion
 import org.tekfive.keep.schema.withOfflinePostgresDdlContext
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -49,6 +50,8 @@ private class PropertyColumnModel(
     val optionalOccurredAt: Instant?,
     val nativeOccurredAt: Instant,
     val optionalNativeOccurredAt: Instant?,
+    val birthDate: LocalDate,
+    val optionalDate: LocalDate?,
     val ratio: Float,
     val score: Double?,
     val enabled: Boolean,
@@ -104,6 +107,8 @@ private object PropertyColumnTable : Table("property_columns") {
         storage = InstantStorage.TIMESTAMP_WITH_TIME_ZONE,
     )
     val ratio = column(PropertyColumnModel::ratio)
+    val birthDate: Column<LocalDate> = column(PropertyColumnModel::birthDate)
+    val optionalDate: Column<LocalDate?> = column(PropertyColumnModel::optionalDate, name = "other_date")
     val score = column(PropertyColumnModel::score)
     val enabled = column(PropertyColumnModel::enabled)
     val amount = column(PropertyColumnModel::amount, precision = 12, scale = 2)
@@ -262,6 +267,18 @@ class PropertyColumnsTest {
             PropertyColumnTable.parentId.foreignKey?.targetOf(PropertyColumnTable.parentId),
         )
         assertTrue(PropertyColumnTable.optionalParentId.columnType.nullable)
+    }
+
+    @Test
+    fun `maps LocalDate properties to DATE with names nullability and retained bindings`() = withPostgresDialect {
+        assertEquals("DATE", PropertyColumnTable.birthDate.columnType.sqlType())
+        assertEquals("DATE", PropertyColumnTable.optionalDate.columnType.sqlType())
+        assertEquals("birth_date", PropertyColumnTable.birthDate.name)
+        assertEquals("other_date", PropertyColumnTable.optionalDate.name)
+        assertFalse(PropertyColumnTable.birthDate.columnType.nullable)
+        assertTrue(PropertyColumnTable.optionalDate.columnType.nullable)
+        assertEquals(PropertyColumnModel::birthDate, PropertyColumnTable.birthDate.dataProperty)
+        assertEquals(PropertyColumnModel::optionalDate, PropertyColumnTable.optionalDate.dataProperty)
     }
 
     @Test

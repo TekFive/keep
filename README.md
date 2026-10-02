@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.32")
+implementation("com.github.TekFive:keep:v1.0.33")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -175,6 +175,10 @@ foreign-key columns, while standard KEEP foreign-key naming, indexing, and casca
 preserved.
 Timestamp columns can likewise be declared as `timestamp(AuditRecord::createdAt)` or from a nullable
 `Long?` property; the name is derived and KEEP's positive timestamp constraint is retained.
+
+`java.time.LocalDate` and `LocalDate?` properties use `column(Model::birthDate)` and are stored as
+PostgreSQL `DATE` values, without a time or time zone. Names default to snake case; use
+`column(Model::birthDate, name = "date_of_birth")` to override the SQL column name.
 
 `Instant` properties use `column` directly and are stored as epoch-millisecond `BIGINT` values by
 default. Native PostgreSQL timestamp storage is an explicit per-column choice:
