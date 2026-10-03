@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.34")
+implementation("com.github.TekFive:keep:v1.0.35")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -615,7 +615,23 @@ at most one row can have a null URL. An optional `customIndexName` sets the cons
 the default is `<table>_<column>_uq`. KEEP's schema creation and migration APIs collect it
 automatically, alongside any `postgresObjects` declared on the table.
 
-For composite keys or explicit table-level declarations, use:
+For composite keys, declare the constraint directly in a `DataTable` or `UuidDataTable` initializer:
+
+```kotlin
+import org.tekfive.keep.data.uniqueConstraint
+
+init {
+    uniqueConstraint(tenantId, alias, nullsNotDistinct = true)
+}
+```
+
+The generated name is `<table>_<column1>_<column2>_uq`. To supply a name (or declare a
+single-column constraint), use `uniqueConstraint("users_tenant_alias_uq", tenantId, alias,
+nullsNotDistinct = true)`. These overloads register typed PostgreSQL constraints automatically;
+no `postgresObjects` override is needed. The older columns-only overload without the
+`nullsNotDistinct` argument continues to create an Exposed unique index.
+
+Explicit `postgresObjects` declarations remain available:
 
 ```kotlin
 override val postgresObjects = postgresObjects {

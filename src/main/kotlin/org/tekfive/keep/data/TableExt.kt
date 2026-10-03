@@ -6,6 +6,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.greater
 import org.jetbrains.exposed.v1.javatime.timestampWithTimeZone as exposedTimestampWithTimeZone
 import org.tekfive.keep.text.citext
+import org.tekfive.keep.schema.postgresObjects
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
@@ -153,4 +154,33 @@ fun Table.phoneNumber(name: String = "phone_number", unique: Boolean = true): Co
 fun Table.uniqueConstraint(column1: Column<*>, column2: Column<*>, vararg additionalColumns: Column<*>) {
     val columns = listOf(column1) + listOf(column2) + additionalColumns
     uniqueIndex("${tableName}_${columns.joinToString("_") { it.name }}", *columns.toTypedArray())
+}
+
+/**
+ * Registers a named PostgreSQL UNIQUE constraint on a KEEP table, without a postgresObjects block.
+ * Set [nullsNotDistinct] to treat nulls as equal within each column combination (PostgreSQL 15+).
+ * Created by KEEP's schema installation and dynamic migration APIs.
+ */
+fun Table.uniqueConstraint(
+    name: String,
+    vararg columns: Column<*>,
+    nullsNotDistinct: Boolean = false,
+) {
+    val keepTable = this as? TypedDataTuple<*, *>
+        ?: throw IllegalArgumentException("uniqueConstraint with PostgreSQL options requires a KEEP table")
+    keepTable.columnPostgresObjects += postgresObjects {
+        uniqueConstraint(name, *columns, nullsNotDistinct = nullsNotDistinct)
+    }
+}
+
+/** Registers a PostgreSQL UNIQUE constraint with an automatically derived name on a KEEP table. */
+fun Table.uniqueConstraint(
+    column1: Column<*>,
+    column2: Column<*>,
+    vararg additionalColumns: Column<*>,
+    nullsNotDistinct: Boolean,
+) {
+    val columns = listOf(column1, column2) + additionalColumns
+    val name = "${tableName.substringAfterLast('.').removeSurrounding("\"")}_${columns.joinToString("_") { it.name }}_uq"
+    uniqueConstraint(name, *columns.toTypedArray(), nullsNotDistinct = nullsNotDistinct)
 }
