@@ -5,6 +5,7 @@ import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.VarCharColumnType
 import org.jetbrains.exposed.v1.core.java.javaUUID
+import org.jetbrains.exposed.v1.core.java.UUIDColumnType
 import org.jetbrains.exposed.v1.javatime.date
 import org.tekfive.jfk.FromJsonObject
 import org.tekfive.jfk.JsonArray
@@ -363,6 +364,20 @@ inline fun <D, reified E> Table.column(
     encrypted: Boolean = false,
 ): Column<E?> where E : Enum<E>, E : DataEnum =
     (if (encrypted) encryptedDataEnum<E>(name) else dataEnum<E>(name)).nullable().withDataProperty(property)
+
+/** Stores a list of [UUID] values as a PostgreSQL UUID[] array. */
+@JvmName("columnJavaUuidList")
+fun <D> Table.column(
+    property: KProperty1<D, List<UUID>>,
+    name: String = property.standardColumnName(),
+): Column<List<UUID>> = array(name, UUIDColumnType()).withDataProperty(property)
+
+/** Nullable counterpart for a list of [UUID] values. */
+@JvmName("columnNullableJavaUuidList")
+fun <D> Table.column(
+    property: KProperty1<D, List<UUID>?>,
+    name: String = property.standardColumnName(),
+): Column<List<UUID>?> = array(name, UUIDColumnType()).nullable().withDataProperty(property)
 
 /** Stores strings as TEXT[], or VARCHAR([maxSize])[] with a character limit per element. */
 @JvmName("columnStringList")

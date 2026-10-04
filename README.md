@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.35")
+implementation("com.github.TekFive:keep:v1.0.36")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -172,6 +172,10 @@ lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `defa
 For `List<String>` or `List<String>?`, `column(Model::tags, maxSize = 100)` uses
 `VARCHAR(100)[]`, limiting each string to 100 characters. Omitting `maxSize` uses `TEXT[]`.
 The limit must be positive and cannot be combined with `encrypted = true`.
+
+For `List<java.util.UUID>` or `List<UUID>?`, use `column(Model::relatedIds)` to store values as
+PostgreSQL `UUID[]`. An explicit `name` overrides the derived snake-case column name. List order
+and duplicates are preserved, and non-nullable lists support empty arrays.
 
 For a `List<JsonObject>` property, `val items = column(Model::items)` stores the list as a
 JSONB array and reads it back as `List<JsonObject>`. Nullable lists are also supported;

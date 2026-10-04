@@ -58,6 +58,8 @@ private class PropertyColumnModel(
     val amount: BigDecimal?,
     val publicId: UUID,
     val optionalId: UUID?,
+    val relatedIds: List<UUID>,
+    val optionalRelatedIds: List<UUID>?,
     val content: ByteArray,
     val jsonValue: JsonValue,
     val jsonObject: JsonObject?,
@@ -114,6 +116,8 @@ private object PropertyColumnTable : Table("property_columns") {
     val amount = column(PropertyColumnModel::amount, precision = 12, scale = 2)
     val publicId = column(PropertyColumnModel::publicId)
     val optionalId = column(PropertyColumnModel::optionalId)
+    val relatedIds: Column<List<UUID>> = column(PropertyColumnModel::relatedIds)
+    val optionalRelatedIds: Column<List<UUID>?> = column(PropertyColumnModel::optionalRelatedIds, name = "other_ids")
     val content = column(PropertyColumnModel::content, maxSize = 4096)
     val jsonValue = column(PropertyColumnModel::jsonValue)
     val jsonObject = column(PropertyColumnModel::jsonObject)
@@ -279,6 +283,18 @@ class PropertyColumnsTest {
         assertTrue(PropertyColumnTable.optionalDate.columnType.nullable)
         assertEquals(PropertyColumnModel::birthDate, PropertyColumnTable.birthDate.dataProperty)
         assertEquals(PropertyColumnModel::optionalDate, PropertyColumnTable.optionalDate.dataProperty)
+    }
+
+    @Test
+    fun `maps Java UUID lists to UUID arrays with names nullability and retained bindings`() = withPostgresDialect {
+        assertEquals("UUID[]", PropertyColumnTable.relatedIds.columnType.sqlType().uppercase())
+        assertEquals("UUID[]", PropertyColumnTable.optionalRelatedIds.columnType.sqlType().uppercase())
+        assertEquals("related_ids", PropertyColumnTable.relatedIds.name)
+        assertEquals("other_ids", PropertyColumnTable.optionalRelatedIds.name)
+        assertFalse(PropertyColumnTable.relatedIds.columnType.nullable)
+        assertTrue(PropertyColumnTable.optionalRelatedIds.columnType.nullable)
+        assertEquals(PropertyColumnModel::relatedIds, PropertyColumnTable.relatedIds.dataProperty)
+        assertEquals(PropertyColumnModel::optionalRelatedIds, PropertyColumnTable.optionalRelatedIds.dataProperty)
     }
 
     @Test
