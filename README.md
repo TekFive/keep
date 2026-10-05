@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.36")
+implementation("com.github.TekFive:keep:v1.0.37")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -340,6 +340,25 @@ db {
 ```
 
 For lower-level work, KEEP also exposes helpers such as `dbConnection()`, `dbCommit()`, `rollback()`, `inDbTransaction()`, and `dbTransactionAt()`.
+
+Use `noDbCommit` inside an existing transaction when a section of work must not commit:
+
+```kotlin
+db {
+    noDbCommit {
+        // Database work; commit attempts throw IllegalStateException.
+    }
+    // The transaction can commit normally after the scope ends.
+}
+```
+
+Scopes can nest and restore normal behavior even when the block throws. The block's result is
+returned, and rollback remains available. The guard applies to the current connection, leaving
+independent connections unaffected. It rejects `dbCommit()` (including `dbCommitQuietly()`),
+Exposed commits on the guarded transaction, and JDBC `commit()` or enabling `autoCommit` through
+`dbConnection()` and connections opened by `DbConnection`. Savepoint-only nested transaction
+completion does not commit the connection. Raw transaction-control SQL and direct driver
+connections (including unwrapped handles) bypass the guard and must not be used inside the scope.
 
 
 ### Entire-table Caches

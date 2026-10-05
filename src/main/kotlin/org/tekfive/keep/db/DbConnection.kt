@@ -3,6 +3,8 @@ package org.tekfive.keep.db
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import org.jetbrains.exposed.v1.core.DatabaseConfig
+import org.jetbrains.exposed.v1.core.Transaction
+import org.jetbrains.exposed.v1.core.statements.StatementInterceptor
 import org.jetbrains.exposed.v1.core.vendors.PostgreSQLDialect
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.transactions.TransactionManager
@@ -33,18 +35,59 @@ fun dbTransactionInstant(): Instant {
 
 
 fun dbConnection(): Connection {
-    return TransactionManager.current().connection.connection as Connection?
+    val connection = TransactionManager.current().connection.connection as Connection?
         ?: throw IllegalStateException("Current thread not running in database transactional context.")
+    return CommitGuardConnection.wrap(connection)
+}
+
+/**
+ * Prevents commits on the current transaction/connection until [block] returns or throws.
+ * Requires an active transaction. Nested scopes are supported; rollback remains allowed.
+ * Commit attempts throw [IllegalStateException], including [dbCommitQuietly].
+ * The enclosing transaction can commit normally after the scope ends.
+ *
+ * Guards KEEP/Exposed transaction commits and JDBC commit/auto-commit changes through
+ * [dbConnection] or connections opened by [DbConnection]. Raw transaction-control SQL and
+ * direct driver connections bypass this guard; do not use them inside the scope.
+ */
+fun <T> noDbCommit(block: () -> T): T {
+    val transaction = checkNotNull(TransactionManager.currentOrNull()) {
+        "noDbCommit requires an active database transaction."
+    }
+    val connection = dbConnection()
+    val interceptor = object : StatementInterceptor {
+        override fun beforeCommit(transaction: Transaction) {
+            CommitGuardConnection.checkCommitAllowed(connection)
+        }
+    }
+    // A savepoint transaction shares its parent's connection. Guard retained references to
+    // those outer transactions too, without affecting transactions on another connection.
+    val transactions = generateSequence(transaction) { it.outerTransaction }
+        .filter { CommitGuardConnection.sameConnection(connection, it.connection.connection as Connection) }
+        .toList()
+    CommitGuardConnection.enter(connection)
+    try {
+        transactions.forEach { it.registerInterceptor(interceptor) }
+        return block()
+    } finally {
+        transactions.forEach { it.unregisterInterceptor(interceptor) }
+        CommitGuardConnection.leave(connection)
+    }
 }
 
 fun dbCommitQuietly() {
     try {
         dbCommit()
+    } catch (e: DbCommitNotAllowedException) {
+        throw e
     } catch (e: Exception) {}
 }
 
 fun dbCommit(): Boolean {
-    return TransactionManager.currentOrNull()?.commit() != null
+    val transaction = TransactionManager.currentOrNull() ?: return false
+    CommitGuardConnection.checkCommitAllowed(transaction.connection.connection as Connection)
+    transaction.commit()
+    return true
 }
 
 fun rollback(): Boolean {
@@ -164,7 +207,7 @@ object DbConnection {
 
         this.connectionProvider = connectionProvider
 
-        Database.connect({ connectionProvider.getConnection() }, DatabaseConfig {
+        Database.connect({ CommitGuardConnection.wrap(connectionProvider.getConnection()) }, DatabaseConfig {
             explicitDialect = PostgreSQLDialect()
             defaultMaxAttempts = 1
             useNestedTransactions = true
@@ -172,8 +215,9 @@ object DbConnection {
     }
 
     fun createConnection(): Connection {
-        return connectionProvider?.getConnection()
+        val connection = connectionProvider?.getConnection()
             ?: throw IllegalStateException("DB has not been started.")
+        return CommitGuardConnection.wrap(connection)
     }
 
     fun shutdown() {
