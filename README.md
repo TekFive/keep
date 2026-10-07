@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.40")
+implementation("com.github.TekFive:keep:v1.0.41")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -168,6 +168,45 @@ semantics for `Long`, decimal precision and scale, and foreign-key references. O
 numeric types, booleans, UUIDs, binary values, JFK JSON values, `DataEnum` values, string/enum
 lists, sets, and `ToJsonObject` values. Standard Exposed modifiers such as `default`, `index`,
 `uniqueIndex`, and `check` can still be chained onto the resulting column.
+
+Text columns can normalize input before storage using `org.tekfive.keep.text.normalizeText`:
+
+```kotlin
+import org.tekfive.keep.text.TextCase
+import org.tekfive.keep.text.normalizeText
+
+val username = column(User::username)
+    .normalizeText(trim = true, letterCase = TextCase.LOWER)
+    .uniqueIndex()
+val countryCode = varchar("country_code", 2)
+    .normalizeText(trim = true, letterCase = TextCase.UPPER)
+val displayName = column(User::displayName).normalizeText(trim = true)
+val optionalCode = varchar("optional_code", 20).nullable()
+    .normalizeText(trim = true, letterCase = TextCase.UPPER)
+```
+
+Both options are opt-in: `trim` defaults to false and `letterCase` to `TextCase.UNCHANGED`.
+Trimming removes surrounding Kotlin whitespace, preserves internal whitespace, and runs before
+locale-independent Unicode case conversion. Null stays null; whitespace-only input trims to an
+empty string. Nullable columns work whether `nullable()` comes before or after normalization.
+Length validation uses the normalized value, including Unicode case expansions.
+
+Normalization applies to KEEP saves, ordinary Exposed inserts/updates and batch writes, and
+bound parameters that use the column's type, including `eq`, `neq`, and `inList`. For example,
+`username eq " ALICE "` binds `"alice"`. Length validation also applies to those query parameters.
+`like` and KEEP's `ilike` patterns keep their existing behavior and are not trimmed or case-converted.
+Raw SQL, SQL expression assignments/comparisons, and database-generated values bypass normalization.
+Declare normalization before indexes and defaults; client-generated defaults pass through it.
+
+Storage remains `TEXT`, `VARCHAR`, or `CITEXT`, so existing indexes and property mappings remain
+usable and adding normalization alone produces no schema migration. `caseInsensitive = true`
+controls comparison behavior independently of normalization. Encrypted text normalizes plaintext
+before encryption; randomized encrypted columns still do not support equality searches.
+
+Reads return exactly what is stored. Saving does not change the supplied data object's string
+properties; a fresh load reflects the normalized stored value. Existing rows are not rewritten:
+backfill them explicitly if needed, checking for collisions in unique columns. This feature
+applies to scalar strings, not elements of string arrays or JSON values.
 
 For `List<String>` or `List<String>?`, `column(Model::tags, maxSize = 100)` uses
 `VARCHAR(100)[]`, limiting each string to 100 characters. Omitting `maxSize` uses `TEXT[]`.
