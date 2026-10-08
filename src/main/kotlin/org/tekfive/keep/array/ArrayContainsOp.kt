@@ -4,6 +4,7 @@ import org.jetbrains.exposed.v1.core.Expression
 import org.jetbrains.exposed.v1.core.ExpressionWithColumnType
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.QueryBuilder
+import org.tekfive.keep.data.DataEnum
 
 /**
  * PostgreSQL `= ANY(array_column)` operator — returns true if the scalar value
@@ -49,6 +50,14 @@ infix fun ExpressionWithColumnType<out Collection<Int>?>.includes(value: Int): O
  */
 infix fun ExpressionWithColumnType<out Collection<String>?>.includes(value: String): Op<Boolean> =
     ArrayContainsOp(this, value, "text")
+
+/**
+ * Returns true when [value]'s stable [DataEnum.id] is in this INTEGER[] enum column.
+ * Supports nullable/non-nullable lists and sets; encrypted enum columns are not supported.
+ */
+infix fun <E> ExpressionWithColumnType<out Collection<E>?>.includes(value: E): Op<Boolean>
+    where E : Enum<E>, E : DataEnum =
+    ArrayContainsOp(this, value.id, "integer")
 
 private fun resolveColumnType(sqlType: String): org.jetbrains.exposed.v1.core.IColumnType<out Any> {
     return when (sqlType) {

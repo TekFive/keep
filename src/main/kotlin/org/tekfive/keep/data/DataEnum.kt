@@ -11,7 +11,7 @@ import org.tekfive.jfk.JsonString
 import org.tekfive.jfk.JsonValue
 import org.tekfive.jfk.ToJsonObject
 import org.tekfive.jfk.json
-import org.tekfive.keep.array.ArrayOverlapOp
+import org.tekfive.keep.array.intersects
 import org.tekfive.keep.array.setArray
 import java.lang.reflect.ParameterizedType
 import kotlin.reflect.KClass
@@ -188,7 +188,8 @@ inline fun <reified E> Table.dataEnumSet(name: String): Column<Set<E>> where E :
  * Generates: `column && ARRAY[id1, id2, ...]::integer[]`
  *
  * Usage: `TalentsTable.workArrangements enumIntersects listOf(WorkArrangement.REMOTE)`
+ * Alias for [intersects], retained for existing callers.
  */
 infix fun <E> ExpressionWithColumnType<out Collection<E>?>.enumIntersects(values: Collection<E>): Op<Boolean>
     where E : Enum<E>, E : DataEnum =
-    ArrayOverlapOp(this, values.map { it.id })
+    this intersects values

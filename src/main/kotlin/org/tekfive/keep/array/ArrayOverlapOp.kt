@@ -4,6 +4,7 @@ import org.jetbrains.exposed.v1.core.Expression
 import org.jetbrains.exposed.v1.core.ExpressionWithColumnType
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.QueryBuilder
+import org.tekfive.keep.data.DataEnum
 
 /**
  * PostgreSQL `&&` (array overlap) operator — returns true if the two arrays
@@ -47,3 +48,13 @@ infix fun ExpressionWithColumnType<out Collection<Int>?>.intersects(values: Coll
 infix fun ExpressionWithColumnType<out Collection<Long>?>.intersects(values: Collection<Long>): Op<Boolean> {
     return ArrayOverlapOp(this, values.toList(), "bigint")
 }
+
+/**
+ * Returns true when this INTEGER[] enum column contains any of [values], matched by [DataEnum.id].
+ * Supports nullable/non-nullable lists and sets. Empty input and SQL NULL never match.
+ * Encrypted enum columns are not supported.
+ */
+@JvmName("intersectsDataEnum")
+infix fun <E> ExpressionWithColumnType<out Collection<E>?>.intersects(values: Collection<E>): Op<Boolean>
+    where E : Enum<E>, E : DataEnum =
+    ArrayOverlapOp(this, values.map { it.id }, "integer")

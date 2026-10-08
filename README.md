@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.44")
+implementation("com.github.TekFive:keep:v1.0.45")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -519,6 +519,26 @@ matter. Both nullable and non-nullable columns are supported. An empty requested
 matches every non-null array, including an empty array; SQL NULL never matches. `containsAll`
 checks containment, not exact set equality. It accepts any `Collection<java.util.UUID>` and
 copies the input when constructing the predicate.
+
+`DataEnum` list/set columns support all three membership operators using the enum's stable
+integer ID:
+
+```kotlin
+import org.tekfive.keep.array.includes
+import org.tekfive.keep.array.intersects
+import org.tekfive.keep.array.containsAll
+
+val hasActive = MyTable.statuses includes Status.ACTIVE
+val hasAny = MyTable.statuses intersects setOf(Status.ACTIVE, Status.PENDING)
+val hasAll = MyTable.statuses containsAll listOf(Status.ACTIVE, Status.PENDING)
+```
+
+These work with `column(::property)`, `dataEnumList`, and `dataEnumSet`, including nullable
+columns. `includes` binds one integer ID; `intersects` uses integer-array overlap (`&&`);
+`containsAll` binds an integer array (`@>`). Empty input never matches for `intersects` and
+matches every non-null array for `containsAll`. SQL NULL never matches. The existing
+`enumIntersects` function remains an alias for `intersects`. Encrypted enum lists are stored
+as binary values and do not support these array operators.
 
 Schema helpers also provide common timestamp, active, description, foreign-key, and unique-constraint conventions.
 
