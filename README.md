@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.41")
+implementation("com.github.TekFive:keep:v1.0.42")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -215,6 +215,11 @@ The limit must be positive and cannot be combined with `encrypted = true`.
 For `List<java.util.UUID>` or `List<UUID>?`, use `column(Model::relatedIds)` to store values as
 PostgreSQL `UUID[]`. An explicit `name` overrides the derived snake-case column name. List order
 and duplicates are preserved, and non-nullable lists support empty arrays.
+
+For `List<Int>` or `List<Int>?`, use `column(Model::scores)` to store PostgreSQL `INTEGER[]`
+values. An explicit `name` overrides the derived column name. Order, duplicates, negative values,
+and the full Kotlin `Int` range are preserved. Non-nullable lists support empty arrays; KEEP's
+data-table saves follow the existing convention of storing empty nullable collections as SQL NULL.
 
 For a `List<JsonObject>` property, `val items = column(Model::items)` stores the list as a
 JSONB array and reads it back as `List<JsonObject>`. Nullable lists are also supported;

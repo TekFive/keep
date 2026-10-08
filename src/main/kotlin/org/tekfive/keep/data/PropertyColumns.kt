@@ -1,6 +1,7 @@
 package org.tekfive.keep.data
 
 import org.jetbrains.exposed.v1.core.Column
+import org.jetbrains.exposed.v1.core.IntegerColumnType
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.VarCharColumnType
@@ -364,6 +365,20 @@ inline fun <D, reified E> Table.column(
     encrypted: Boolean = false,
 ): Column<E?> where E : Enum<E>, E : DataEnum =
     (if (encrypted) encryptedDataEnum<E>(name) else dataEnum<E>(name)).nullable().withDataProperty(property)
+
+/** Stores a list of [Int] values as a PostgreSQL INTEGER[] array. */
+@JvmName("columnIntList")
+fun <D> Table.column(
+    property: KProperty1<D, List<Int>>,
+    name: String = property.standardColumnName(),
+): Column<List<Int>> = array(name, IntegerColumnType()).withDataProperty(property)
+
+/** Nullable counterpart for a list of [Int] values. */
+@JvmName("columnNullableIntList")
+fun <D> Table.column(
+    property: KProperty1<D, List<Int>?>,
+    name: String = property.standardColumnName(),
+): Column<List<Int>?> = array(name, IntegerColumnType()).nullable().withDataProperty(property)
 
 /** Stores a list of [UUID] values as a PostgreSQL UUID[] array. */
 @JvmName("columnJavaUuidList")

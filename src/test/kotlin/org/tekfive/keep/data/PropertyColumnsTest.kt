@@ -60,6 +60,8 @@ private class PropertyColumnModel(
     val optionalId: UUID?,
     val relatedIds: List<UUID>,
     val optionalRelatedIds: List<UUID>?,
+    val scores: List<Int>,
+    val optionalScores: List<Int>?,
     val content: ByteArray,
     val jsonValue: JsonValue,
     val jsonObject: JsonObject?,
@@ -118,6 +120,8 @@ private object PropertyColumnTable : Table("property_columns") {
     val optionalId = column(PropertyColumnModel::optionalId)
     val relatedIds: Column<List<UUID>> = column(PropertyColumnModel::relatedIds)
     val optionalRelatedIds: Column<List<UUID>?> = column(PropertyColumnModel::optionalRelatedIds, name = "other_ids")
+    val scores: Column<List<Int>> = column(PropertyColumnModel::scores)
+    val optionalScores: Column<List<Int>?> = column(PropertyColumnModel::optionalScores, name = "other_scores")
     val content = column(PropertyColumnModel::content, maxSize = 4096)
     val jsonValue = column(PropertyColumnModel::jsonValue)
     val jsonObject = column(PropertyColumnModel::jsonObject)
@@ -283,6 +287,18 @@ class PropertyColumnsTest {
         assertTrue(PropertyColumnTable.optionalDate.columnType.nullable)
         assertEquals(PropertyColumnModel::birthDate, PropertyColumnTable.birthDate.dataProperty)
         assertEquals(PropertyColumnModel::optionalDate, PropertyColumnTable.optionalDate.dataProperty)
+    }
+
+    @Test
+    fun `maps Int lists to integer arrays with names nullability and retained bindings`() = withPostgresDialect {
+        assertEquals("INT[]", PropertyColumnTable.scores.columnType.sqlType().uppercase())
+        assertEquals("INT[]", PropertyColumnTable.optionalScores.columnType.sqlType().uppercase())
+        assertEquals("scores", PropertyColumnTable.scores.name)
+        assertEquals("other_scores", PropertyColumnTable.optionalScores.name)
+        assertFalse(PropertyColumnTable.scores.columnType.nullable)
+        assertTrue(PropertyColumnTable.optionalScores.columnType.nullable)
+        assertEquals(PropertyColumnModel::scores, PropertyColumnTable.scores.dataProperty)
+        assertEquals(PropertyColumnModel::optionalScores, PropertyColumnTable.optionalScores.dataProperty)
     }
 
     @Test
