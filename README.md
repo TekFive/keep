@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.42")
+implementation("com.github.TekFive:keep:v1.0.43")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -473,6 +473,22 @@ val query = WorkflowRevisionsTable
     .selectAll()
     .where { WorkflowRevisionsTable.serviceReferences includes serviceId }
 ```
+
+For a `Set<java.util.UUID>` or `List<java.util.UUID>` column, `containsAll` checks that every
+requested UUID occurs in the stored array, allowing additional stored members:
+
+```kotlin
+import org.tekfive.keep.array.containsAll
+
+val requiredIds = setOf(firstId, secondId)
+val exists = MyTable.rowExists(MyTable.memberIds containsAll requiredIds)
+```
+
+This uses PostgreSQL `@>` with a bound UUID-array parameter. Order and duplicate counts do not
+matter. Both nullable and non-nullable columns are supported. An empty requested collection
+matches every non-null array, including an empty array; SQL NULL never matches. `containsAll`
+checks containment, not exact set equality. It accepts any `Collection<java.util.UUID>` and
+copies the input when constructing the predicate.
 
 Schema helpers also provide common timestamp, active, description, foreign-key, and unique-constraint conventions.
 
