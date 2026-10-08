@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.43")
+implementation("com.github.TekFive:keep:v1.0.44")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -361,6 +361,28 @@ by default; enable it with `POOL_JDBC_CONNECTIONS=true`. The pool defaults to
 connection (`JDBC_CONNECTION_TIMEOUT_SECONDS`). Register configuration sources
 before startup. Restart the connection provider to apply changes.
 
+Catch-site classifiers are available on any `Throwable`, including wrapped Exposed/JDBC errors:
+
+```kotlin
+import org.tekfive.keep.utils.isDatabaseException
+import org.tekfive.keep.utils.isRecoverableDatabaseException
+
+val databaseRelated = exception.isDatabaseException()
+val recoverable = exception.isRecoverableDatabaseException()
+```
+
+Recoverable failures include connection/pool failures, JDBC transient errors, I/O errors beneath
+a database exception, PostgreSQL resource shortages, shutdowns, session/transaction timeouts,
+serialization failures, deadlocks, and lock contention. Data, constraint, syntax, authentication,
+invalid transaction state, and query-cancellation errors return `false`. Unknown errors and bare
+I/O exceptions also return `false`. Causes and JDBC `nextException` chains are checked safely;
+explicit non-recoverable errors take precedence, and suppressed cleanup errors are ignored.
+The SQLSTATE classification follows the [PostgreSQL error codes](https://www.postgresql.org/docs/current/errcodes-appendix.html).
+
+Recovery can require a fresh connection and retrying the entire transaction. A connection failure
+may leave the commit outcome unknown, so `true` does not guarantee that replaying a write is safe.
+These helpers do not change the job subsystem's existing, broader database retry policy.
+
 ### Transaction Utilities
 
 The `db { ... }` helper centralizes Exposed transaction usage. If code is already running inside a transaction, `db` reuses it by default; otherwise it starts one. This lets table helpers and application code compose without accidentally opening unrelated transactions.
@@ -423,7 +445,15 @@ CountriesCache.invalidate()                    // Reload on the next read.
 CountriesCache.clear()                         // Alias for invalidate().
 ```
 
-For UUID tables, extend `UuidDatabaseTableCache<MyUuidData>(MyUuidTable)` instead. Both wrappers
+All three table-cache classes can also be constructed directly:
+
+```kotlin
+val countriesCache = DatabaseTableCache(CountriesTable)
+val uuidCache = UuidDatabaseTableCache(MyUuidTable)
+val typedCache = TypedDatabaseTableCache(CountriesTable)
+```
+
+The classes remain open for subclassing and custom overrides. Both ID-specific wrappers
 share `TypedDatabaseTableCache<ID, D>`. Supply `cachePredicate = CountriesTable.active eq true`
 to cache a filtered selection. The default loader orders rows by ID.
 

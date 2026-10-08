@@ -17,7 +17,7 @@ import java.util.Locale
  * not invalidate this cache automatically. Database reads join the caller's transaction, so refresh
  * or invalidate after a successful commit to avoid publishing uncommitted data across callers.
  */
-abstract class TypedDatabaseTableCache<ID : Any, D : IdentifiedData<ID>>(
+open class TypedDatabaseTableCache<ID : Any, D : IdentifiedData<ID>>(
     protected val table: TypedDataTuple<ID, D>,
     private val cachePredicate: Op<Boolean>? = null,
 ) {

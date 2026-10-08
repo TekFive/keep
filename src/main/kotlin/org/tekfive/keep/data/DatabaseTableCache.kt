@@ -9,7 +9,7 @@ import org.jetbrains.exposed.v1.core.Op
  * object CountriesCache : DatabaseTableCache<CountryData>(CountriesTable) {}
  * ```
  */
-abstract class DatabaseTableCache<D : Data>(
+open class DatabaseTableCache<D : Data>(
     table: DataTable<D>,
     cachePredicate: Op<Boolean>? = null,
 ) : TypedDatabaseTableCache<Long, D>(table, cachePredicate)
