@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.45")
+implementation("com.github.TekFive:keep:v1.0.46")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -1146,12 +1146,19 @@ rollback also rolls back counter changes.
 ```kotlin
 val loginLimit = PersistentRateLimitAction("login", maxRequests = 10, windowMillis = 60_000)
 
+// Read current configuration on every request.
+val dynamicLimit = PersistentRateLimitAction(
+    "api",
+    maxRequests = { settings.maxRequests },
+    windowMillis = { settings.windowMillis },
+)
+
 // Optional key extractor and counter table for a shared tenant budget.
 val tenantLimit = PersistentRateLimitAction(
     "exports", maxRequests = 100, windowMillis = 60_000, counters = UsageCounters,
 ) { exchange -> exchange.request["tenantId"].toString() }
 
-// Supply loginLimit or tenantLimit in your route's preActions.
+// Supply loginLimit, dynamicLimit, or tenantLimit in your route's preActions.
 ```
 
 The action defaults to the client IP and uses scope `rate:<scope>` (leaving 123 characters for the
@@ -1159,6 +1166,11 @@ supplied scope). It adds `X-RateLimit-Limit` and `X-RateLimit-Remaining`, and re
 plus `Retry-After` when the limit is exceeded. Rejected requests also count. Keys are stored as
 supplied; provide an application-owned key extractor if identifiers need pseudonymization.
 Run the action before the request's business transaction when failed requests must remain counted.
+
+The closures are evaluated once per request, and both values must be positive before the counter
+is changed. Request-limit changes take effect immediately. Window-duration changes apply to new
+windows; active windows retain their stored expiry, which is also used for `Retry-After`.
+The fixed-value constructor remains available and validates its arguments at construction time.
 
 ### Encryption Support
 

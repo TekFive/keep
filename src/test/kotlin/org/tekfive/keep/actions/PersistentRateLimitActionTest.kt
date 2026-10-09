@@ -111,6 +111,100 @@ class PersistentRateLimitActionTest {
     }
 
     @Test
+    fun `dynamic limits are evaluated once per request and changes apply immediately`() {
+        var maxRequests = 2
+        var limitCalls = 0
+        var durationCalls = 0
+        val action = PersistentRateLimitAction(
+            scope = "dynamic",
+            maxRequests = { limitCalls++; maxRequests },
+            windowMillis = { durationCalls++; 1000L },
+            clock = clock,
+        )
+        assertEquals(0, limitCalls)
+        assertEquals(0, durationCalls)
+
+        val first = request(action)
+        assertEquals(200, first.status)
+        assertEquals(listOf("2"), first.getHeaderValues("X-RateLimit-Limit"))
+        assertEquals(listOf("1"), first.getHeaderValues("X-RateLimit-Remaining"))
+        assertEquals(1, limitCalls)
+        assertEquals(1, durationCalls)
+
+        maxRequests = 1
+        val rejected = request(action)
+        assertEquals(429, rejected.status)
+        assertEquals(listOf("1"), rejected.getHeaderValues("X-RateLimit-Limit"))
+        assertEquals(listOf("0"), rejected.getHeaderValues("X-RateLimit-Remaining"))
+        assertEquals(2, limitCalls)
+        assertEquals(2, durationCalls)
+
+        maxRequests = 4
+        val allowed = request(action)
+        assertEquals(200, allowed.status)
+        assertEquals(listOf("4"), allowed.getHeaderValues("X-RateLimit-Limit"))
+        assertEquals(listOf("1"), allowed.getHeaderValues("X-RateLimit-Remaining"))
+        assertEquals(3, limitCalls)
+        assertEquals(3, durationCalls)
+        assertEquals(3L, CountersTable.get("rate:dynamic", "127.0.0.1")?.count)
+    }
+
+    @Test
+    fun `dynamic duration applies to new windows and preserves active expiry`() {
+        var windowMillis = 1000L
+        val action = PersistentRateLimitAction("duration", { 1 }, { windowMillis }, clock = clock) {
+            "tenant-123"
+        }
+        assertEquals(200, request(action).status)
+        assertEquals(1000L, CountersTable.get("rate:duration", "tenant-123")?.expiresAt)
+
+        windowMillis = 2501
+        clock.now = 500
+        val rejected = request(action)
+        assertEquals(429, rejected.status)
+        assertEquals(listOf("1"), rejected.getHeaderValues("Retry-After"))
+        assertEquals(1000L, CountersTable.get("rate:duration", "tenant-123")?.expiresAt)
+
+        clock.now = 1000
+        assertEquals(200, request(action).status)
+        assertEquals(3501L, CountersTable.get("rate:duration", "tenant-123")?.expiresAt)
+        assertEquals(listOf("3"), request(action).getHeaderValues("Retry-After"))
+
+        windowMillis = 100
+        clock.now = 3501
+        assertEquals(200, request(action).status)
+        assertEquals(3601L, CountersTable.get("rate:duration", "tenant-123")?.expiresAt)
+    }
+
+    @Test
+    fun `invalid dynamic settings do not create or increment counters`() {
+        var maxRequests = 0
+        var windowMillis = 1000L
+        val action = PersistentRateLimitAction("invalid", { maxRequests }, { windowMillis }, clock = clock)
+
+        assertEquals(500, request(action).status)
+        assertNull(CountersTable.get("rate:invalid", "127.0.0.1"))
+
+        maxRequests = 2
+        assertEquals(200, request(action).status)
+
+        for (invalidValue in listOf(0, -1)) {
+            windowMillis = invalidValue.toLong()
+            assertEquals(500, request(action).status)
+            assertEquals(1L, CountersTable.get("rate:invalid", "127.0.0.1")?.count)
+
+            windowMillis = 1000
+            maxRequests = invalidValue
+            assertEquals(500, request(action).status)
+            assertEquals(1L, CountersTable.get("rate:invalid", "127.0.0.1")?.count)
+            maxRequests = 2
+        }
+
+        assertEquals(200, request(action).status)
+        assertEquals(2L, CountersTable.get("rate:invalid", "127.0.0.1")?.count)
+    }
+
+    @Test
     fun `invalid rate limit configuration fails immediately`() {
         assertFailsWith<IllegalArgumentException> { PersistentRateLimitAction("", 1, 1000) }
         assertFailsWith<IllegalArgumentException> { PersistentRateLimitAction("a".repeat(124), 1, 1000) }

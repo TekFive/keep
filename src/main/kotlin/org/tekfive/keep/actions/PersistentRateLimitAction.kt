@@ -13,24 +13,42 @@ import java.time.Clock
  * The default key is the client IP. Supply [clientKeyExtractor] for user/tenant identifiers
  * or application-owned pseudonymization. Keys are stored as supplied, without normalization.
  * Run before a request's business transaction if rejected/failed requests must remain counted.
+ * [maxRequests] and [windowMillis] are evaluated once per request and must return positive values.
+ * Limit changes apply immediately; duration changes apply when a new counter window starts.
+ * Existing windows retain their stored expiry.
  */
 class PersistentRateLimitAction(
     scope: String,
-    private val maxRequests: Int,
-    private val windowMillis: Long,
+    private val maxRequests: () -> Int,
+    private val windowMillis: () -> Long,
     private val counters: CounterTable = CountersTable,
     private val clock: Clock = Clock.systemUTC(),
     private val clientKeyExtractor: (Exchange) -> String = { it.request.clientIp },
 ) : ExchangeAction {
-    private val counterScope = "rate:$scope"
-
-    init {
-        require(scope.isNotBlank() && counterScope.length <= 128) { "scope must contain 1 to 123 characters" }
+    constructor(
+        scope: String,
+        maxRequests: Int,
+        windowMillis: Long,
+        counters: CounterTable = CountersTable,
+        clock: Clock = Clock.systemUTC(),
+        clientKeyExtractor: (Exchange) -> String = { it.request.clientIp },
+    ) : this(scope, { maxRequests }, { windowMillis }, counters, clock, clientKeyExtractor) {
         require(maxRequests > 0) { "maxRequests must be greater than zero" }
         require(windowMillis > 0) { "windowMillis must be greater than zero" }
     }
 
+    private val counterScope = "rate:$scope"
+
+    init {
+        require(scope.isNotBlank() && counterScope.length <= 128) { "scope must contain 1 to 123 characters" }
+    }
+
     override fun invoke(exchange: Exchange): Any? {
+        val maxRequests = maxRequests()
+        val windowMillis = windowMillis()
+        require(maxRequests > 0) { "maxRequests must be greater than zero" }
+        require(windowMillis > 0) { "windowMillis must be greater than zero" }
+
         val counter = counters.increment(
             scope = counterScope,
             key = clientKeyExtractor(exchange),
