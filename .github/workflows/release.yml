@@ -32,7 +32,19 @@ jobs:
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
-        run: ./gradlew test --no-daemon
+        timeout-minutes: 10
+        run: |
+          cat > "$RUNNER_TEMP/keep-test-logging.gradle" <<'EOF'
+          allprojects {
+              tasks.withType(Test).configureEach {
+                  testLogging {
+                      events "started", "passed", "skipped", "failed"
+                      exceptionFormat "full"
+                  }
+              }
+          }
+          EOF
+          ./gradlew test --no-daemon --init-script "$RUNNER_TEMP/keep-test-logging.gradle"
 
       - name: Remove existing release and tag
         env:
