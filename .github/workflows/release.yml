@@ -31,6 +31,15 @@ jobs:
           fi
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
+      - name: Pull integration test images
+        timeout-minutes: 5
+        run: |
+          # Avoid Docker Hub authentication outages during Testcontainers startup.
+          for image in testcontainers/ryuk:0.12.0 library/postgres:16-alpine library/postgres:17-alpine; do
+            docker pull "mirror.gcr.io/$image"
+            docker tag "mirror.gcr.io/$image" "${image#library/}"
+          done
+
       - name: Run tests
         timeout-minutes: 10
         run: |
@@ -40,23 +49,11 @@ jobs:
                   testLogging {
                       events "started", "passed", "skipped", "failed"
                       exceptionFormat "full"
-                      showStandardStreams = true
                   }
               }
           }
           EOF
-          ./gradlew test --no-daemon --init-script "$RUNNER_TEMP/keep-test-logging.gradle" &
-          gradle_pid=$!
-          (
-            sleep 120
-            jcmd -l
-            for worker_pid in $(jcmd -l | awk '$2 == "worker.org.gradle.process.internal.worker.GradleWorkerMain" { print $1 }'); do
-              jcmd "$worker_pid" Thread.print || true
-            done
-          ) &
-          diagnostics_pid=$!
-          trap 'kill "$diagnostics_pid" 2>/dev/null || true' EXIT
-          wait "$gradle_pid"
+          ./gradlew test --no-daemon --init-script "$RUNNER_TEMP/keep-test-logging.gradle"
 
       - name: Remove existing release and tag
         env:
