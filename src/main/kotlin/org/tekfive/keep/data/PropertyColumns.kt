@@ -29,6 +29,10 @@ import org.tekfive.keep.json.jsonValue
 import org.tekfive.keep.json.toFromJson
 import org.tekfive.keep.json.toFromJsonArray
 import org.tekfive.keep.text.citext
+import org.tekfive.keep.text.TsVector
+import org.tekfive.keep.text.TsQuery
+import org.tekfive.keep.text.tsVector
+import org.tekfive.keep.text.tsQuery
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
@@ -38,6 +42,22 @@ import kotlin.reflect.KProperty1
 
 private val acronymBoundary = Regex("([A-Z]+)([A-Z][a-z])")
 private val wordBoundary = Regex("([a-z0-9])([A-Z])")
+
+@JvmName("columnTsVector")
+fun <D> Table.column(property: KProperty1<D, TsVector>, name: String = property.standardColumnName()): Column<TsVector> =
+    tsVector(name).withDataProperty(property)
+
+@JvmName("columnNullableTsVector")
+fun <D> Table.column(property: KProperty1<D, TsVector?>, name: String = property.standardColumnName()): Column<TsVector?> =
+    tsVector(name).nullable().withDataProperty(property)
+
+@JvmName("columnTsQuery")
+fun <D> Table.column(property: KProperty1<D, TsQuery>, name: String = property.standardColumnName()): Column<TsQuery> =
+    tsQuery(name).withDataProperty(property)
+
+@JvmName("columnNullableTsQuery")
+fun <D> Table.column(property: KProperty1<D, TsQuery?>, name: String = property.standardColumnName()): Column<TsQuery?> =
+    tsQuery(name).nullable().withDataProperty(property)
 
 @PublishedApi
 internal fun KProperty1<*, *>.standardIdColumnName(): String =
