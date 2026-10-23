@@ -207,6 +207,7 @@ object DbConnection {
 
         this.connectionProvider = connectionProvider
 
+        Database.registerDialectMetadata(PostgreSQLDialect.dialectName) { PostgresMetadata() }
         Database.connect({ CommitGuardConnection.wrap(connectionProvider.getConnection()) }, DatabaseConfig {
             explicitDialect = PostgreSQLDialect()
             defaultMaxAttempts = 1
