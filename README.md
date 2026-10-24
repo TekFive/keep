@@ -52,6 +52,18 @@ Run the test suite:
 ./gradlew test
 ```
 
+The audit persistence tests can use an existing PostgreSQL instance without starting
+containers. Set `KEEP_AUDIT_TEST_JDBC_URL`, `KEEP_AUDIT_TEST_JDBC_USER`, and
+`KEEP_AUDIT_TEST_JDBC_PASSWORD`, then run:
+
+```bash
+./gradlew test --tests 'org.tekfive.keep.audit.*'
+```
+
+The persistence tests create a temporary schema and remove it afterward. The supplied
+database role needs permission to create schemas. Without the URL, those tests are
+skipped and the audit declaration tests still run.
+
 To develop against sibling source checkouts instead of JitPack artifacts, place ACK, JFK, and KViash beside this repository and enable local-project substitution:
 
 ```bash
@@ -73,6 +85,24 @@ Generate a jar:
 ```
 
 ## Major Features
+
+### Audited UUID tables
+
+`AuditedUuidTable<Record, Writer>` adds writer-required saves, property provenance,
+and encrypted historical snapshots to `UuidDataTable`. Applications provide a writer
+codec and bind their creation-writer and provenance properties through
+`AuditStateBinding`. Mutable properties declare stable IDs with `.audited(id)`;
+encrypted secrets use `.secret(id)` and stay out of snapshots.
+
+Updates lock the stored row and preserve other writers' changes to untouched fields.
+The row write and snapshot share a savepoint, including when an application catches
+a failed operation. Parent/child history and independently audited values inside a
+JSON column use explicit declarations and contributors. Applications retain their
+authorization, archiving, writer-priority, and other business rules.
+
+Use `withAssociatedTables` when assembling schema tables to include each root's
+snapshot table. See the [audit package guide](src/main/kotlin/org/tekfive/keep/audit/_package.md)
+for declaration, serialization, transaction, and history contracts.
 
 ### Data Table Helpers
 

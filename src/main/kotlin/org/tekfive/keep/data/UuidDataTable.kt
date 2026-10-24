@@ -160,7 +160,7 @@ abstract class UuidDataTable<D : UuidData>(
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun <T> deleteByColumnValue(value: T, column: Column<T>): Int =
+    open fun <T> deleteByColumnValue(value: T, column: Column<T>): Int =
         deleteWhere { (column as Column<Any?>) eq (value as Any?) }
 
 }
