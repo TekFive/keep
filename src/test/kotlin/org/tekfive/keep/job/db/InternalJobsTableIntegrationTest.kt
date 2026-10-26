@@ -9,6 +9,7 @@ import org.tekfive.ack.sources.MapSource
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.*
+import org.tekfive.keep.job.dispatch.DispatchContext
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -410,6 +411,46 @@ class JobRecordsTableOperationsIntegrationTest {
         val job = db { table.getById(id) }
         assertEquals(3, job.maxConcurrentJobs)
         assertEquals("tenant-a", job.concurrencyKey)
+    }
+
+    @Test
+    fun `insertJob persists initiating user and defaults to no user`() {
+        val userId = "user-" + "a".repeat(300)
+        val userJobId = table.insertJob(defaultSpec, userId = userId)
+        val systemJobId = table.insertJob(defaultSpec)
+
+        assertEquals(userId, db { table.getById(userJobId) }.userId)
+        assertNull(db { table.getById(systemJobId) }.userId)
+    }
+
+    @Test
+    fun `insertJob inherits parent user unless explicitly replaced or cleared`() {
+        val parentId = table.insertJob(defaultSpec, userId = "original-user")
+        val parent = db { table.getById(parentId) }
+        val job = object : Job {
+            override fun execute(context: JobContext): JobResult = JobCompleted()
+        }
+        val context = DispatchContext(1, job, defaultSpec, parent, table, null)
+
+        val inheritedId = table.insertJob(defaultSpec, parentJobContext = context)
+        val replacedId = table.insertJob(defaultSpec, parentJobContext = context, userId = "another-user")
+        val clearedId = table.insertJob(defaultSpec, parentJobContext = context, userId = null)
+
+        assertEquals("original-user", db { table.getById(inheritedId) }.userId)
+        assertEquals("another-user", db { table.getById(replacedId) }.userId)
+        assertNull(db { table.getById(clearedId) }.userId)
+    }
+
+    @Test
+    fun `launchCopy persists user attribution including null`() {
+        for (userId in listOf("original-user", null)) {
+            val originalId = table.insertJob(defaultSpec, userId = userId)
+            val original = db { table.getById(originalId) }
+
+            val copy = table.launchCopy(original)
+
+            assertEquals(userId, db { table.getById(copy.id) }.userId)
+        }
     }
 
     @Test

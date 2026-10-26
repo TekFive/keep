@@ -60,6 +60,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val concurrencyKey = varchar("concurrency_key", 255).nullable()
     val timeoutSeconds = integer("timeout_seconds").nullable()
     val maxRuntimeSeconds = integer("max_runtime_seconds").nullable()
+    val userId = text("user_id").nullable()
 
     override val postgresObjects = postgresObjects {
         index("job_records_running_type_lock_key_uq", type, lockKey, unique = true,
@@ -96,6 +97,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 concurrencyKey = copy.concurrencyKey,
                 timeoutSeconds = copy.timeoutSeconds,
                 maxRuntimeSeconds = copy.maxRuntimeSeconds,
+                userId = copy.userId,
             ))
         }
     }
@@ -197,6 +199,10 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
+    /**
+     * Queues a job attributed to [userId], which defaults to the parent context's initiating user.
+     * Pass an explicit null to queue a system job without inheriting that attribution.
+     */
     fun insertJob(
         spec: JobSpec,
         parentJobContext: JobContext? = null,
@@ -209,6 +215,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         concurrencyKey: String? = null,
         timeoutSeconds: Int? = null,
         maxRuntimeSeconds: Int? = null,
+        userId: String? = parentJobContext?.userId,
     ): Long {
         var estimatedRuntimeSeconds: Int? = null
         if (maxEstimatedRuntimeRecords > 0) {
@@ -270,6 +277,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 maxRuntimeSeconds = maxRuntimeSeconds
                     ?: (parentJobContext as? DispatchContext)?.jobRecord?.maxRuntimeSeconds
                     ?: spec.maxRuntimeSeconds,
+                userId = userId,
             )
             create(jobRecord)
             jobRecord.id

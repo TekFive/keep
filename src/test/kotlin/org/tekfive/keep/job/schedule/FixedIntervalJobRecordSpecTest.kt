@@ -11,6 +11,7 @@ import org.tekfive.keep.job.db.QueryNode
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FixedIntervalJobRecordSpecTest {
@@ -80,6 +81,7 @@ class FixedIntervalJobRecordSpecTest {
 
         assertNotNull(job)
         assertEquals("fixed-interval-test", job.type)
+        assertNull(job.userId)
     }
 
     @Test

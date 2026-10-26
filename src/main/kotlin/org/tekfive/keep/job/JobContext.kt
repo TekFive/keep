@@ -13,6 +13,10 @@ interface JobContext {
     val details: JsonObject?
     val log: JobLogger
 
+    /** User who initiated the job, or null for a system job. */
+    val userId: String?
+        get() = null
+
     val hasMoreRetries: Boolean
         get() = attempt <= maxRetries
 

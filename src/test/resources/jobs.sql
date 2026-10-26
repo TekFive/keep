@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS job_records (
     max_concurrent_jobs INT,
     concurrency_key VARCHAR(255),
     timeout_seconds INT,
-    max_runtime_seconds INT
+    max_runtime_seconds INT,
+    user_id TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq

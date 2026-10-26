@@ -25,6 +25,7 @@ internal class DispatchContext(
 ) : JobContext {
 
     override val jobId: Long = jobRecord.id
+    override val userId: String? = jobRecord.userId
     override val type: String = jobRecord.type
     val priority: Int = jobRecord.priority
     override val createdAt: Long = jobRecord.createdAt

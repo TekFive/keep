@@ -275,11 +275,13 @@ class JobRecordCoordinatorIntegrationTest {
         val config = createConfig()
         val executionCount = AtomicInteger(0)
         val allDone = CountDownLatch(2)
+        val initiatingUsers = CopyOnWriteArrayList<String?>()
 
         val spec = createSpec(typeId = "retry-job", maxRetries = 1) {
             object : Job {
                 override fun execute(context: JobContext): JobResult {
                     val count = executionCount.incrementAndGet()
+                    initiatingUsers.add(context.userId)
                     allDone.countDown()
                     return if (count == 1) {
                         JobFailed("Transient error", retryIfAllowed = true)
@@ -293,17 +295,19 @@ class JobRecordCoordinatorIntegrationTest {
         val registry = JobRegistry()
         registry.register(spec)
 
-        val originalJobId = insertJob(spec)
+        val originalJobId = jobsTable.insertJob(spec, userId = "initiating-user")
 
         val coordinator = JobCoordinator("test-system", registry, config)
         coordinator.start()
 
         try {
             assertTrue(allDone.await(15, TimeUnit.SECONDS), "Both job executions did not complete within timeout")
+            assertEquals(listOf("initiating-user", "initiating-user"), initiatingUsers.toList())
 
             // Original job should be FAILED
             val originalRecord = awaitJobState(originalJobId, JobState.FAILED.id)
             assertEquals("Transient error", originalRecord["failure_details"])
+            assertEquals("initiating-user", originalRecord["user_id"])
 
             // Find the retry job
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
@@ -312,6 +316,7 @@ class JobRecordCoordinatorIntegrationTest {
                     stmt.executeQuery().use { rs ->
                         assertTrue(rs.next(), "Retry job not found")
                         assertEquals(2, rs.getInt("attempt"))
+                        assertEquals("initiating-user", rs.getString("user_id"))
                         awaitJobState(rs.getLong("id"), JobState.COMPLETED.id)
                     }
                 }

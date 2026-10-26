@@ -10,6 +10,8 @@ import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val JOB_SCHEMA = "keep_job_install_test"
@@ -65,6 +67,34 @@ class JobSchemaInstallTest {
             exec("SET LOCAL search_path TO $JOB_SCHEMA, public")
             val plan = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
             assertTrue(plan.isEmpty, "Job indexes must be preserved by dynamic migrations: $plan")
+        }
+    }
+
+    @Test
+    fun `migration adds nullable user attribution and preserves existing jobs`() {
+        transaction(database) {
+            PostgresFreshInstallGenerator.plan(JobInstallSchema).statements.forEach { exec(it) }
+            exec("SET LOCAL search_path TO $JOB_SCHEMA, public")
+            exec("ALTER TABLE job_records DROP COLUMN user_id")
+            exec("INSERT INTO job_records (id, type, created_at, priority, attempt, state) VALUES (1, 'existing-job', 1, 0, 1, 1)")
+
+            val plan = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
+            assertEquals(1, plan.statements.size, "Only the user_id column should need adding: $plan")
+            plan.execute()
+
+            exec("SELECT user_id FROM job_records WHERE type = 'existing-job'") { rs ->
+                assertTrue(rs.next(), "Existing job must survive migration")
+                assertNull(rs.getString("user_id"))
+            }
+            exec("""
+                SELECT data_type, is_nullable FROM information_schema.columns
+                WHERE table_schema = '$JOB_SCHEMA' AND table_name = 'job_records' AND column_name = 'user_id'
+            """.trimIndent()) { rs ->
+                assertTrue(rs.next(), "Migration must add user_id")
+                assertEquals("text", rs.getString("data_type"))
+                assertEquals("YES", rs.getString("is_nullable"))
+            }
+            assertTrue(PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true).isEmpty)
         }
     }
 

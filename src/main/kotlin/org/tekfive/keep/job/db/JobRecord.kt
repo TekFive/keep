@@ -28,5 +28,7 @@ class JobRecord(
     val timeoutSeconds: Int? = null,
     /** Maximum elapsed seconds per attempt. Null inherits; non-positive disables the limit. */
     val maxRuntimeSeconds: Int? = null,
+    /** User who initiated the job, retained across retries and copies. Null for system jobs. */
+    val userId: String? = null,
 ) : Data() {
 }

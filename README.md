@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.0.48")
+implementation("com.github.TekFive:keep:v1.1.0")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -1342,6 +1342,32 @@ Job records support priority ordering, minimum start times, retry policies, lock
 
 Calling `coordinator.wakeUp()` after inserting a job ends the current poll wait early, so the new
 job is dispatched without waiting for `pollSeconds` to elapse.
+
+For work initiated by a user, pass their ID when inserting the job:
+
+```kotlin
+JobRecordsTable.insertJob(
+    spec = SendReminderJob,
+    details = mapOf("patientId" to patientId).toJsonObject(),
+    userId = currentUser.id,
+)
+```
+
+The initiating user is stored as `JobRecord.userId` and available during execution as
+`JobContext.userId`. Retries and `launchCopy` preserve it. When `parentJobContext` is supplied,
+`insertJob` inherits its user ID unless `userId` is explicitly supplied; an explicit `null`
+clears attribution for the new job. Jobs without a user, including automatic scheduled runs,
+default to `null`. The calling application supplies the authenticated user's ID.
+
+Existing databases need the nullable `user_id` column before deploying the updated library:
+
+```sql
+ALTER TABLE job_records ADD COLUMN user_id TEXT;
+```
+
+Existing rows remain `NULL`. Applications whose `KeepSchema` includes `JobRecordsTable` can
+generate and apply this change with `PostgresMigrationGenerator`. Rebuild consuming applications
+because the job constructor and insertion method have new JVM signatures.
 
 #### Resilience
 
