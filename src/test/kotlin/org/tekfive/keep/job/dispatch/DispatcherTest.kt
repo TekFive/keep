@@ -65,6 +65,7 @@ class DispatcherTest {
         return object : JobSpec {
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = "test-type"
+            override val jobDescription = "Test job for dispatcher execution."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = maxRetries
             override val minSecondsBetweenRetries: Int? = null

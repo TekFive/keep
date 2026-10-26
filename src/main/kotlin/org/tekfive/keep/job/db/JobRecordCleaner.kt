@@ -41,6 +41,7 @@ import kotlin.time.Duration.Companion.minutes
 class JobRecordCleaner : Job {
 
     companion object : FixedIntervalJobSpec {
+        override val jobDescription = "Deletes expired job records and their logs."
         override val estimateRuntime = false
         override val jobPriority: Int? = null
         override val maxRetriesOnFailure: Int = 0

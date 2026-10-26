@@ -11,6 +11,9 @@ interface JobSpec {
         get() = getNamespaceClass().simpleName
             ?: error("Cannot resolve simple name for ${getNamespaceClass()}")
 
+    /** Describes the work performed by this job type. */
+    val jobDescription: String
+
     fun createJob(): Job
 
     val estimateRuntime: Boolean

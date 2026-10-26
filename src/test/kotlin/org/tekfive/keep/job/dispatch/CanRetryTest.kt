@@ -52,6 +52,7 @@ class CanRetryTest {
         return object : JobSpec {
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = "test"
+            override val jobDescription = "Test job for retry eligibility."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = maxRetries
             override val minSecondsBetweenRetries: Int? = null

@@ -53,6 +53,7 @@ class JobRecordRegistryTest {
 }
 
 internal class TestJobSpec(override val jobTypeIdentifier: String) : JobSpec {
+    override val jobDescription = "Test job for registry lookups."
     override val estimateRuntime: Boolean = false
     override val jobPriority: Int? = null
     override val maxRetriesOnFailure: Int = 0

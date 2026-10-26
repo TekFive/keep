@@ -170,6 +170,7 @@ class JobTimeoutMonitorIntegrationTest {
         var attempts = 0
         val spec = object : JobSpec {
             override val jobTypeIdentifier = "retry-runtime"
+            override val jobDescription = "Test job with a retryable runtime timeout callback."
             override fun createJob(): Job = error("Not dispatched")
             override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int, reason: JobTimeoutReason) {
                 assertEquals(JobTimeoutReason.MAX_RUNTIME, reason)
@@ -227,6 +228,7 @@ class JobTimeoutMonitorIntegrationTest {
         var attempts = 0
         val spec = object : JobSpec {
             override val jobTypeIdentifier = "retry-timeout-callback"
+            override val jobDescription = "Test job with a retryable heartbeat timeout callback."
             override fun createJob(): Job = error("Not dispatched")
 
             override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
@@ -261,6 +263,7 @@ class JobTimeoutMonitorIntegrationTest {
     fun `failed timeout callback does not block other expired jobs`() {
         val failedSpec = object : JobSpec {
             override val jobTypeIdentifier = "failed-timeout-callback"
+            override val jobDescription = "Test job with a failing timeout callback."
             override fun createJob(): Job = error("Not dispatched")
             override fun onJobTimedOut(jobRecord: JobRecord, timedOutAt: Long, timeoutSeconds: Int) {
                 error("Callback unavailable")
@@ -339,6 +342,7 @@ class JobTimeoutMonitorIntegrationTest {
         override val timeoutSeconds: Int? = null,
         override val maxRuntimeSeconds: Int? = null,
     ) : JobSpec {
+        override val jobDescription = "Test job for timeout monitoring."
         var timedOutJob: JobRecord? = null
             private set
         var timedOutAt: Long? = null

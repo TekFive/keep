@@ -63,17 +63,20 @@ class JobRecordsTableOperationsIntegrationTest {
 
     private val defaultSpec = object : JobSpec {
         override val jobTypeIdentifier = "test-job"
+        override val jobDescription = "Test job for table operations."
         override fun createJob(): Job = throw UnsupportedOperationException()
     }
 
     private val exclusiveSpec = object : JobSpec {
         override val jobTypeIdentifier = "test-job"
+        override val jobDescription = "Test job requiring exclusive execution."
         override val exclusiveExecution = true
         override fun createJob(): Job = throw UnsupportedOperationException()
     }
 
     private val typeLimitedSpec = object : JobSpec {
         override val jobTypeIdentifier = "test-job"
+        override val jobDescription = "Test job with a concurrency limit."
         override val maxConcurrentJobs = 2
         override fun createJob(): Job = throw UnsupportedOperationException()
     }

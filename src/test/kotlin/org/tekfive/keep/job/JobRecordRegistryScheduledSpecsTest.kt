@@ -15,6 +15,7 @@ class JobRecordRegistryScheduledSpecsTest {
         return object : ScheduledJobSpec {
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = typeId
+            override val jobDescription = "Scheduled test job for registry lookups."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = 0
             override val minSecondsBetweenRetries: Int? = null

@@ -125,6 +125,7 @@ class JobRecordCoordinatorIntegrationTest {
     ): JobSpec = object : JobSpec {
         override val estimateRuntime = false
         override val jobTypeIdentifier = typeId
+        override val jobDescription = "Test job for coordinator execution."
         override val jobPriority = priority
         override val maxRetriesOnFailure: Int = maxRetries
         override val minSecondsBetweenRetries = minSecsBetweenRetries
@@ -140,6 +141,7 @@ class JobRecordCoordinatorIntegrationTest {
     ): FixedIntervalJobSpec = object : FixedIntervalJobSpec {
         override val estimateRuntime = false
         override val jobTypeIdentifier = typeId
+        override val jobDescription = "Scheduled test job for coordinator execution."
         override val jobPriority: Int? = null
         override val maxRetriesOnFailure: Int = 0
         override val minSecondsBetweenRetries: Int? = null
@@ -682,6 +684,7 @@ class JobRecordCoordinatorIntegrationTest {
         val brokenScheduledSpec = object : FixedIntervalJobSpec {
             override val estimateRuntime = false
             override val jobTypeIdentifier = "broken-schedule"
+            override val jobDescription = "Test job with a failing schedule."
             override val intervalSeconds: Long
                 get() = throw IllegalStateException("interval misconfigured")
             override fun createJob(): Job = throw IllegalStateException("never constructed")
@@ -902,6 +905,7 @@ class JobRecordCoordinatorIntegrationTest {
         val spec = object : JobSpec {
             override val estimateRuntime = false
             override val jobTypeIdentifier = "broken-retry"
+            override val jobDescription = "Test job with failing retry preparation."
             override val maxRetriesOnFailure: Int = 2
             override val minSecondsBetweenRetries: Int? = 0
             override fun getEstimatedRuntimeQueries(jobDetails: JsonObject): List<QueryNode> = throw IllegalStateException("bad runtime query")

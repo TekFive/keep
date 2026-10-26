@@ -58,6 +58,7 @@ class JobRecordsTableIntegrationTest {
     ): JobSpec = object : JobSpec {
         override val estimateRuntime = false
         override val jobTypeIdentifier = typeId
+        override val jobDescription = "Test job for record persistence."
         override val jobPriority = priority
         override val maxRetriesOnFailure: Int = 0
         override val minSecondsBetweenRetries: Int? = null

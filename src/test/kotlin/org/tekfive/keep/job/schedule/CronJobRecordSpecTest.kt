@@ -30,6 +30,7 @@ class CronJobRecordSpecTest {
             override val cronZone: ZoneId = zone
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = "cron-test"
+            override val jobDescription = "Test job with a cron schedule."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = 0
             override val minSecondsBetweenRetries: Int? = null
@@ -140,6 +141,7 @@ class CronJobRecordSpecTest {
             // Do not override cronZone, use default
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = "cron-default-zone"
+            override val jobDescription = "Test job using the default cron time zone."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = 0
             override val minSecondsBetweenRetries: Int? = null

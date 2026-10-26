@@ -25,6 +25,7 @@ class FixedIntervalJobRecordSpecTest {
             override val runImmediatelyOnFirstSchedule: Boolean = runImmediatelyOnFirstSchedule
             override val estimateRuntime: Boolean = false
             override val jobTypeIdentifier: String = "fixed-interval-test"
+            override val jobDescription = "Test job with a fixed interval schedule."
             override val jobPriority: Int? = null
             override val maxRetriesOnFailure: Int = 0
             override val minSecondsBetweenRetries: Int? = null

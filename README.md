@@ -1300,6 +1300,8 @@ Recovery-file parsing includes size and Argon2 parameter limits to avoid unbound
 
 The job subsystem stores work in PostgreSQL and dispatches registered `JobSpec` implementations through `JobCoordinator`. It records attempts, states, start/end timestamps, failure details, and job logs.
 
+Every `JobSpec` implementation must provide a `jobDescription` describing its work.
+
 ```kotlin
 class SendReminderJob : Job {
     override fun execute(context: JobContext): JobResult {
@@ -1310,6 +1312,7 @@ class SendReminderJob : Job {
 
     companion object : JobSpec {
         override val jobTypeIdentifier = "send-reminder"
+        override val jobDescription = "Sends a patient reminder."
         override val maxRetriesOnFailure = 3
         override val minSecondsBetweenRetries = 300
         override fun createJob(): Job = SendReminderJob()
