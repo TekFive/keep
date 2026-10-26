@@ -3,7 +3,7 @@ package org.tekfive.keep.job
 import org.junit.jupiter.api.Test
 import org.tekfive.jfk.JsonObject
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class JobRecordContextTest {
@@ -31,8 +31,8 @@ class JobRecordContextTest {
     }
 
     @Test
-    fun `context defaults to no initiating user`() {
-        assertNull(createContext(attempt = 1, maxRetries = 0).userId)
+    fun `context defaults to a system trigger`() {
+        assertEquals(JobTrigger.system(), createContext(attempt = 1, maxRetries = 0).trigger)
     }
 
     @Test

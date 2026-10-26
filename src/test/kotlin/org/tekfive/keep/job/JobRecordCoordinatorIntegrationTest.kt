@@ -66,8 +66,10 @@ class JobRecordCoordinatorIntegrationTest {
         pollSeconds: Int = 1,
         dispatchCount: Int = 2,
         maxEstimatedRuntimeRecords: Int = 0,
+        applicationVersion: String? = "test-app-v1",
     ): JobConfiguration {
         return object : JobConfiguration {
+            override val applicationVersion = applicationVersion
             override val dispatchCount: Int = dispatchCount
             override val pollSeconds: Int = pollSeconds
             override val maximumCandidatesBuffer: Int = dispatchCount * 2
@@ -156,7 +158,7 @@ class JobRecordCoordinatorIntegrationTest {
             conn.prepareStatement(
                 """
                     INSERT INTO job_records (
-                        type, created_at, priority, attempt, state, scheduled_job, system_identifier,
+                        type, created_at, priority, attempt, state, trigger_source, system_identifier,
                         started_at, ended_at
                     ) VALUES (?, ?, 0, 1, ?, ?, ?, ?, ?)
                 """.trimIndent()
@@ -164,7 +166,7 @@ class JobRecordCoordinatorIntegrationTest {
                 stmt.setString(1, typeId)
                 stmt.setLong(2, createdAt)
                 stmt.setInt(3, JobState.COMPLETED.id)
-                stmt.setBoolean(4, true)
+                stmt.setInt(4, JobTriggerSource.SCHEDULE.id)
                 stmt.setString(5, "seed-system")
                 stmt.setLong(6, endedAt)
                 stmt.setLong(7, endedAt)
@@ -178,8 +180,8 @@ class JobRecordCoordinatorIntegrationTest {
             conn.prepareStatement(
                 """
                     INSERT INTO job_records (
-                        type, created_at, priority, attempt, state, scheduled_job, system_identifier, started_at
-                    ) VALUES (?, ?, 0, 1, ?, FALSE, ?, ?)
+                        type, created_at, priority, attempt, state, trigger_source, system_identifier, started_at
+                    ) VALUES (?, ?, 0, 1, ?, 1, ?, ?)
                     RETURNING id
                 """.trimIndent()
             ).use { stmt ->
@@ -274,21 +276,28 @@ class JobRecordCoordinatorIntegrationTest {
 
     @Test
     fun `coordinator retries a job when retryIfAllowed is true and retries remain`() {
-        val config = createConfig()
         val executionCount = AtomicInteger(0)
+        val config = object : JobConfiguration by createConfig() {
+            override val applicationVersion: String
+                get() = if (executionCount.get() == 0) "test-app-v1" else "test-app-v2"
+        }
         val allDone = CountDownLatch(2)
         val initiatingUsers = CopyOnWriteArrayList<String?>()
+        val initialCounts = CopyOnWriteArrayList<List<Long?>>()
+        val contexts = CopyOnWriteArrayList<JobContext>()
 
         val spec = createSpec(typeId = "retry-job", maxRetries = 1) {
             object : Job {
                 override fun execute(context: JobContext): JobResult {
                     val count = executionCount.incrementAndGet()
-                    initiatingUsers.add(context.userId)
+                    initiatingUsers.add(context.trigger.userId)
+                    initialCounts.add(listOf(context.processedCount, context.failedCount, context.totalCount))
+                    contexts.add(context)
                     allDone.countDown()
                     return if (count == 1) {
-                        JobFailed("Transient error", retryIfAllowed = true)
+                        JobFailed("Transient error", retryIfAllowed = true, processedCount = 3, failedCount = 1, totalCount = 10)
                     } else {
-                        JobCompleted()
+                        JobCompleted("Imported 10 items", processedCount = 10, failedCount = 0, totalCount = 10)
                     }
                 }
             }
@@ -297,7 +306,8 @@ class JobRecordCoordinatorIntegrationTest {
         val registry = JobRegistry()
         registry.register(spec)
 
-        val originalJobId = jobsTable.insertJob(spec, userId = "initiating-user")
+        val originalJobId = jobsTable.insertJob(spec, trigger = JobTrigger.user("initiating-user"),
+            subject = JobSubject("import", "42"), tenantId = "tenant-a")
 
         val coordinator = JobCoordinator("test-system", registry, config)
         coordinator.start()
@@ -305,11 +315,22 @@ class JobRecordCoordinatorIntegrationTest {
         try {
             assertTrue(allDone.await(15, TimeUnit.SECONDS), "Both job executions did not complete within timeout")
             assertEquals(listOf("initiating-user", "initiating-user"), initiatingUsers.toList())
+            assertEquals(listOf(listOf(null, null, null), listOf(null, null, null)), initialCounts.toList())
+            contexts.forEach {
+                assertEquals(JobSubject("import", "42"), it.subject)
+                assertEquals("tenant-a", it.tenantId)
+            }
+            assertEquals(contexts[0].runId, contexts[1].runId)
 
             // Original job should be FAILED
             val originalRecord = awaitJobState(originalJobId, JobState.FAILED.id)
             assertEquals("Transient error", originalRecord["failure_details"])
-            assertEquals("initiating-user", originalRecord["user_id"])
+            assertEquals("initiating-user", originalRecord["trigger_user_id"])
+            assertEquals("Transient error", originalRecord["result_summary"])
+            assertEquals(3L, originalRecord["processed_count"])
+            assertEquals(1L, originalRecord["failed_count"])
+            assertEquals(10L, originalRecord["total_count"])
+            assertEquals("test-app-v1", originalRecord["application_version"])
 
             // Find the retry job
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
@@ -318,11 +339,45 @@ class JobRecordCoordinatorIntegrationTest {
                     stmt.executeQuery().use { rs ->
                         assertTrue(rs.next(), "Retry job not found")
                         assertEquals(2, rs.getInt("attempt"))
-                        assertEquals("initiating-user", rs.getString("user_id"))
-                        awaitJobState(rs.getLong("id"), JobState.COMPLETED.id)
+                        assertEquals("initiating-user", rs.getString("trigger_user_id"))
+                        val retry = awaitJobState(rs.getLong("id"), JobState.COMPLETED.id)
+                        assertEquals(originalRecord["run_id"], retry["run_id"])
+                        assertEquals("import", retry["subject_type"])
+                        assertEquals("42", retry["subject_id"])
+                        assertEquals("tenant-a", retry["tenant_id"])
+                        assertEquals("Imported 10 items", retry["result_summary"])
+                        assertEquals("test-app-v2", retry["application_version"])
+                        assertEquals(10L, retry["processed_count"])
+                        assertEquals(0L, retry["failed_count"])
+                        assertEquals(10L, retry["total_count"])
                     }
                 }
             }
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
+    fun `waiting result persists its summary and retains saved progress`() {
+        val spec = createSpec(typeId = "waiting-report") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    context.updateProgress(processedCount = 7, failedCount = 1, totalCount = 10)
+                    throw JobWaiting("Review the failed item")
+                }
+            }
+        }
+        val registry = JobRegistry().apply { register(spec) }
+        val id = jobsTable.insertJob(spec)
+        val coordinator = JobCoordinator("worker", registry, createConfig())
+        coordinator.start()
+        try {
+            val record = awaitJobState(id, JobState.WAITING.id)
+            assertEquals("Review the failed item", record["result_summary"])
+            assertEquals(7L, record["processed_count"])
+            assertEquals(1L, record["failed_count"])
+            assertEquals(10L, record["total_count"])
         } finally {
             coordinator.stop(waitForStop = true)
         }

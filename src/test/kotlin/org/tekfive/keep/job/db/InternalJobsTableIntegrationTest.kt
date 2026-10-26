@@ -6,10 +6,12 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.tekfive.ack.configuration.AckRegistry
 import org.tekfive.ack.sources.MapSource
+import org.tekfive.jfk.JsonObject
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.*
 import org.tekfive.keep.job.dispatch.DispatchContext
+import org.tekfive.keep.job.dispatch.TerminatedStateException
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -18,9 +20,12 @@ import java.sql.SQLException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
+import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -417,18 +422,22 @@ class JobRecordsTableOperationsIntegrationTest {
     }
 
     @Test
-    fun `insertJob persists initiating user and defaults to no user`() {
+    fun `insertJob persists trigger sources and defaults to system`() {
         val userId = "user-" + "a".repeat(300)
-        val userJobId = table.insertJob(defaultSpec, userId = userId)
-        val systemJobId = table.insertJob(defaultSpec)
-
-        assertEquals(userId, db { table.getById(userJobId) }.userId)
-        assertNull(db { table.getById(systemJobId) }.userId)
+        for (trigger in listOf(JobTrigger.user(userId), JobTrigger.system(), JobTrigger.scheduled(userId), JobTrigger.event())) {
+            val id = table.insertJob(defaultSpec, trigger = trigger)
+            assertEquals(trigger, db { table.getById(id) }.trigger)
+        }
+        val first = db { table.getById(table.insertJob(defaultSpec)) }
+        val second = db { table.getById(table.insertJob(defaultSpec)) }
+        assertEquals(JobTrigger.system(), first.trigger)
+        assertNotEquals(first.runId, second.runId)
     }
 
     @Test
-    fun `insertJob inherits parent user unless explicitly replaced or cleared`() {
-        val parentId = table.insertJob(defaultSpec, userId = "original-user")
+    fun `insertJob inherits reporting identity unless explicitly replaced or cleared`() {
+        val subject = JobSubject("import", "import-42")
+        val parentId = table.insertJob(defaultSpec, trigger = JobTrigger.user("original-user"), subject = subject, tenantId = "tenant-a")
         val parent = db { table.getById(parentId) }
         val job = object : Job {
             override fun execute(context: JobContext): JobResult = JobCompleted()
@@ -436,24 +445,101 @@ class JobRecordsTableOperationsIntegrationTest {
         val context = DispatchContext(1, job, defaultSpec, parent, table, null)
 
         val inheritedId = table.insertJob(defaultSpec, parentJobContext = context)
-        val replacedId = table.insertJob(defaultSpec, parentJobContext = context, userId = "another-user")
-        val clearedId = table.insertJob(defaultSpec, parentJobContext = context, userId = null)
+        val otherRunId = UUID.randomUUID()
+        val replacedId = table.insertJob(defaultSpec, parentJobContext = context, trigger = JobTrigger.user("another-user"),
+            subject = JobSubject("document", "document-7"), tenantId = "tenant-b", runId = otherRunId)
+        val clearedId = table.insertJob(defaultSpec, parentJobContext = context, trigger = JobTrigger.system(), subject = null, tenantId = null)
 
-        assertEquals("original-user", db { table.getById(inheritedId) }.userId)
-        assertEquals("another-user", db { table.getById(replacedId) }.userId)
-        assertNull(db { table.getById(clearedId) }.userId)
+        val inherited = db { table.getById(inheritedId) }
+        assertEquals(parent.trigger, inherited.trigger)
+        assertEquals(subject, inherited.subject)
+        assertEquals("tenant-a", inherited.tenantId)
+        assertEquals(parent.runId, inherited.runId)
+        val json = inherited.toJsonObject()
+        assertEquals("import-42", (json["subject"] as JsonObject)["subjectId"].string)
+        val triggerJson = json["trigger"] as JsonObject
+        assertEquals("original-user", triggerJson["userId"].string)
+        assertEquals(JobTriggerSource.USER.id, (triggerJson["source"] as JsonObject)["id"].int)
+        assertEquals(inherited.runId.toString(), json["runId"].string)
+        val replaced = db { table.getById(replacedId) }
+        assertEquals(JobTrigger.user("another-user"), replaced.trigger)
+        assertEquals(JobSubject("document", "document-7"), replaced.subject)
+        assertEquals("tenant-b", replaced.tenantId)
+        assertEquals(otherRunId, replaced.runId)
+        val cleared = db { table.getById(clearedId) }
+        assertEquals(JobTrigger.system(), cleared.trigger)
+        assertNull(cleared.subject)
+        assertNull(cleared.tenantId)
     }
 
     @Test
-    fun `launchCopy persists user attribution including null`() {
-        for (userId in listOf("original-user", null)) {
-            val originalId = table.insertJob(defaultSpec, userId = userId)
+    fun `launchCopy preserves reporting identity and resets attempt outcomes`() {
+        for (trigger in listOf(JobTrigger.user("original-user"), JobTrigger.system())) {
+            val originalId = table.insertJob(defaultSpec, trigger = trigger, subject = JobSubject("import", "42"), tenantId = "tenant-a")
             val original = db { table.getById(originalId) }
+            original.resultSummary = "Previous result"
+            original.applicationVersion = "old-version"
+            original.timeoutReason = JobTimeoutReason.HEARTBEAT
+            original.processedCount = 10
+            original.failedCount = 2
+            original.totalCount = 20
 
-            val copy = table.launchCopy(original)
+            val copy = db { table.getById(table.launchCopy(original).id) }
 
-            assertEquals(userId, db { table.getById(copy.id) }.userId)
+            assertEquals(trigger, copy.trigger)
+            assertEquals(original.runId, copy.runId)
+            assertEquals(original.subject, copy.subject)
+            assertEquals(original.tenantId, copy.tenantId)
+            assertNull(copy.resultSummary)
+            assertNull(copy.applicationVersion)
+            assertNull(copy.timeoutReason)
+            assertNull(copy.processedCount)
+            assertNull(copy.failedCount)
+            assertNull(copy.totalCount)
         }
+    }
+
+    @Test
+    fun `progress updates persist snapshots and cannot overwrite a terminal attempt`() {
+        val id = table.insertJob(defaultSpec)
+        val record = assertNotNull(db { table.tryCaptureRunLock(id, "worker", defaultSpec, "app-v1") })
+        val job = object : Job {
+            override fun execute(context: JobContext): JobResult = JobCompleted()
+        }
+        val context = DispatchContext(1, job, defaultSpec, record, table, null)
+        assertEquals("app-v1", context.applicationVersion)
+        context.updateProgress(totalCount = 5_000_000_000L)
+        context.updateProgress(processedCount = 4_000_000_000L, failedCount = 2)
+        val progress = db { table.getById(id) }
+        assertEquals(4_000_000_000L, progress.processedCount)
+        assertEquals(2L, progress.failedCount)
+        assertEquals(5_000_000_000L, progress.totalCount)
+        assertFailsWith<IllegalArgumentException> { context.updateProgress(processedCount = -1) }
+        context.updateProgress(failedCount = null)
+        assertNull(db { table.getById(id) }.failedCount)
+
+        db { table.tryMarkEnded(id, 100L, JobState.COMPLETED, resultSummary = "Finished", failedCount = 0) }
+        assertFailsWith<TerminatedStateException> { context.updateProgress(processedCount = 1) }
+        assertFalse(table.tryMarkEnded(id, 200L, JobState.FAILED, resultSummary = "Late failure", processedCount = 1))
+        val ended = db { table.getById(id) }
+        assertEquals("Finished", ended.resultSummary)
+        assertEquals(4_000_000_000L, ended.processedCount)
+        assertEquals(0L, ended.failedCount)
+        assertEquals(5_000_000_000L, ended.totalCount)
+    }
+
+    @Test
+    fun `recapture records the current application version and resets progress`() {
+        val id = table.insertJob(defaultSpec)
+        val first = assertNotNull(db { table.tryCaptureRunLock(id, "worker-a", defaultSpec, "app-v1") })
+        table.updateProgress(id, 4, 1, 10)
+        assertTrue(table.tryRequeue(id))
+        val second = assertNotNull(db { table.tryCaptureRunLock(id, "worker-b", defaultSpec, "app-v2") })
+        assertEquals(first.runId, second.runId)
+        assertEquals("app-v2", second.applicationVersion)
+        assertNull(second.processedCount)
+        assertNull(second.failedCount)
+        assertNull(second.totalCount)
     }
 
     @Test
@@ -528,7 +614,7 @@ class JobRecordsTableOperationsIntegrationTest {
     @Test
     fun `database unique index prevents multiple non-terminated scheduled jobs of same type`() {
         val sql = """
-            INSERT INTO job_records (type, created_at, priority, attempt, state, scheduled_job, minimum_start_at)
+            INSERT INTO job_records (type, created_at, priority, attempt, state, trigger_source, minimum_start_at)
             VALUES (?, ?, 0, 1, ?, ?, ?)
         """.trimIndent()
 
@@ -537,7 +623,7 @@ class JobRecordsTableOperationsIntegrationTest {
                 stmt.setString(1, "scheduled-type")
                 stmt.setLong(2, 1_000L)
                 stmt.setInt(3, JobState.PENDING.id)
-                stmt.setBoolean(4, true)
+                stmt.setInt(4, JobTriggerSource.SCHEDULE.id)
                 stmt.setLong(5, 5_000L)
                 stmt.executeUpdate()
             }
@@ -547,7 +633,7 @@ class JobRecordsTableOperationsIntegrationTest {
                     stmt.setString(1, "scheduled-type")
                     stmt.setLong(2, 2_000L)
                     stmt.setInt(3, JobState.PENDING.id)
-                    stmt.setBoolean(4, true)
+                    stmt.setInt(4, JobTriggerSource.SCHEDULE.id)
                     stmt.setLong(5, 6_000L)
                     stmt.executeUpdate()
                 }

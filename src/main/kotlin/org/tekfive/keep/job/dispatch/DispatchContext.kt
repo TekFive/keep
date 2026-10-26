@@ -9,7 +9,9 @@ import org.tekfive.keep.job.JobSpec
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.Job
-import java.sql.Connection
+import org.tekfive.keep.job.JobSubject
+import org.tekfive.keep.job.JobTrigger
+import java.util.UUID
 import java.sql.SQLException
 import java.util.concurrent.TimeUnit
 
@@ -25,7 +27,14 @@ internal class DispatchContext(
 ) : JobContext {
 
     override val jobId: Long = jobRecord.id
-    override val userId: String? = jobRecord.userId
+    override val trigger: JobTrigger = jobRecord.trigger
+    override val subject: JobSubject? = jobRecord.subject
+    override val runId: UUID = jobRecord.runId
+    override val tenantId: String? = jobRecord.tenantId
+    override val applicationVersion: String? = jobRecord.applicationVersion
+    override val processedCount: Long? get() = jobRecord.processedCount
+    override val failedCount: Long? get() = jobRecord.failedCount
+    override val totalCount: Long? get() = jobRecord.totalCount
     override val type: String = jobRecord.type
     val priority: Int = jobRecord.priority
     override val createdAt: Long = jobRecord.createdAt
@@ -51,6 +60,19 @@ internal class DispatchContext(
     }
 
     @Synchronized
+    override fun updateProgress(processedCount: Long?, failedCount: Long?, totalCount: Long?) {
+        db {
+            if (!jobsTable.updateProgress(jobId, processedCount, failedCount, totalCount)) {
+                val current = jobsTable.findById(jobId) ?: throw JobNotFoundException(jobId)
+                throw TerminatedStateException(current.state)
+            }
+        }
+        jobRecord.processedCount = processedCount
+        jobRecord.failedCount = failedCount
+        jobRecord.totalCount = totalCount
+    }
+
+    @Synchronized
     override fun checkIn(now: Long) {
         if (now - lastCheckInAt >= checkInMillis) {
             lastCheckInAt = now
@@ -66,4 +88,6 @@ internal class DispatchContext(
             }
         }
     }
+
+
 }

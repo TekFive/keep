@@ -6,6 +6,10 @@ import java.sql.SQLException
 import java.time.InstantSource
 
 interface JobConfiguration {
+    /** Application version recorded when a worker captures an attempt. */
+    val applicationVersion: String?
+        get() = null
+
     val dispatchCount: Int
 
     val pollSeconds: Int

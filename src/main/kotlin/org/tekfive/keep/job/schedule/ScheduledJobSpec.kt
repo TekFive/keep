@@ -3,6 +3,8 @@ package org.tekfive.keep.job.schedule
 import org.tekfive.jfk.JsonObject
 import org.tekfive.keep.job.JobSpec
 import org.tekfive.keep.job.JobState
+import org.tekfive.keep.job.JobSubject
+import org.tekfive.keep.job.JobTrigger
 import org.tekfive.keep.job.db.JobRecord
 
 interface ScheduledJobSpec : JobSpec {
@@ -15,6 +17,8 @@ interface ScheduledJobSpec : JobSpec {
         lockKey: String? = null,
         maxConcurrentJobs: Int? = null,
         concurrencyKey: String? = null,
+        subject: JobSubject? = null,
+        tenantId: String? = null,
     ): JobRecord {
         val resolvedMaxConcurrentJobs = maxConcurrentJobs ?: this.maxConcurrentJobs
         require(resolvedMaxConcurrentJobs == null || resolvedMaxConcurrentJobs > 0) {
@@ -40,10 +44,12 @@ interface ScheduledJobSpec : JobSpec {
             lastCheckInAt = null,
             endedAt = null,
             failureDetails = null,
-            scheduledJob = true,
+            trigger = JobTrigger.scheduled(),
             lockKey = lockKey,
             maxConcurrentJobs = resolvedMaxConcurrentJobs,
             concurrencyKey = concurrencyKey,
+            subject = subject,
+            tenantId = tenantId,
         )
     }
 }

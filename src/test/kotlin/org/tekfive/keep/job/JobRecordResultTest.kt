@@ -3,10 +3,18 @@ package org.tekfive.keep.job
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class JobRecordResultTest {
+
+    @Test
+    fun `results reject negative reporting counts`() {
+        assertFailsWith<IllegalArgumentException> { JobCompleted(processedCount = -1) }
+        assertFailsWith<IllegalArgumentException> { JobFailed(failedCount = -1) }
+        assertFailsWith<IllegalArgumentException> { JobWaiting(totalCount = -1) }
+    }
 
     @Test
     fun `JobSuccess is a JobResult`() {

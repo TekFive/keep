@@ -10,6 +10,9 @@ import java.time.InstantSource
 
 abstract class BaseAckJobConfiguration() : JobConfiguration {
 
+    override val applicationVersion: String?
+        get() = applicationVersionProperty.orNull()
+
     val databaseRetryPolicy = DatabaseRetryPolicy(AckDatabaseRetrySettings)
 
     override val dispatchCount: Int
@@ -46,6 +49,7 @@ abstract class BaseAckJobConfiguration() : JobConfiguration {
     }
 
     companion object {
+        val applicationVersionProperty = Ack.string("JOB_APPLICATION_VERSION", description = "Application version recorded on each captured job attempt.")
         val dispatchCountProperty = Ack.int("JOB_DISPATCH_COUNT", BaseJobConfiguration.DEFAULT_DISPATCH_COUNT, description = "Number of jobs dispatched per poll cycle.")
         val pollSecondsProperty = Ack.int("JOB_POLL_SECONDS", BaseJobConfiguration.DEFAULT_POLL_SECONDS, description = "Seconds between job queue polls.")
         val maximumCandidatesBufferProperty = Ack.int("JOB_MAXIMUM_CANDIDATES_BUFFER", default = { dispatchCountProperty() * 2 }, description = "Maximum number of candidate jobs buffered for dispatch.")

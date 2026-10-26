@@ -3,6 +3,8 @@ package org.tekfive.keep.job.db
 import org.tekfive.keep.json.query.QueryNode
 import org.tekfive.jfk.JsonObject
 import org.jetbrains.exposed.v1.core.Op
+import org.jetbrains.exposed.v1.core.CustomFunction
+import org.jetbrains.exposed.v1.core.java.javaUUID
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
@@ -32,11 +34,16 @@ import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobSpec
 import org.tekfive.keep.job.JobState
 import org.tekfive.keep.job.JobTimeoutReason
+import org.tekfive.keep.job.JobSubject
+import org.tekfive.keep.job.JobTrigger
+import org.tekfive.keep.job.JobTriggerSource
+import org.tekfive.keep.job.validateJobCounts
 import org.tekfive.keep.job.dispatch.DispatchContext
 import org.tekfive.keep.job.schedule.ScheduledJobSpec
 import org.tekfive.keep.json.jsonObject
 import org.tekfive.keep.utils.isUniqueConstraint
 import java.sql.SQLException
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
@@ -55,13 +62,21 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val lastCheckInAt = long("last_checkin_at").nullable()
     val endedAt = long("ended_at").nullable()
     val failureDetails = text("failure_details").nullable()
-    val scheduledJob = bool("scheduled_job").default(false)
+    val trigger = JobTriggerColumns(this)
     val lockKey = varchar("lock_key", 255).nullable()
     val maxConcurrentJobs = integer("max_concurrent_jobs").nullable()
     val concurrencyKey = varchar("concurrency_key", 255).nullable()
     val timeoutSeconds = integer("timeout_seconds").nullable()
     val maxRuntimeSeconds = integer("max_runtime_seconds").nullable()
-    val userId = text("user_id").nullable()
+    val subject = JobSubjectColumns(this)
+    val resultSummary = text("result_summary").nullable()
+    val applicationVersion = text("application_version").nullable()
+    val runId = javaUUID("run_id").let { it.defaultExpression(CustomFunction("gen_random_uuid", it.columnType)) }
+    val timeoutReason = dataEnum<JobTimeoutReason>("timeout_reason").nullable()
+    val tenantId = text("tenant_id").nullable()
+    val processedCount = long("processed_count").nullable()
+    val failedCount = long("failed_count").nullable()
+    val totalCount = long("total_count").nullable()
 
     override val postgresObjects = postgresObjects {
         index("job_records_running_type_lock_key_uq", type, lockKey, unique = true,
@@ -69,10 +84,11 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         index("job_records_running_concurrency_scope_idx", type, concurrencyKey,
             predicate = SqlExpression("state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL"))
         index("job_records_scheduled_chain_type_uq", type, unique = true,
-            predicate = SqlExpression("scheduled_job = TRUE AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})"))
+            predicate = SqlExpression("trigger_source = ${JobTriggerSource.SCHEDULE.id} AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})"))
         index("job_records_pending_priority_created_idx", listOf(priority.indexKey(SortOrder.DESC), createdAt.indexKey()),
             predicate = SqlExpression("state = ${JobState.PENDING.id}"))
         index("job_records_type_state_idx", type, state)
+        index("job_records_run_id_idx", runId)
     }
 
     fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord {
@@ -92,13 +108,15 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 null,
                 null,
                 null,
-                scheduledJob = copy.scheduledJob,
+                trigger = copy.trigger,
                 lockKey = copy.lockKey,
                 maxConcurrentJobs = copy.maxConcurrentJobs,
                 concurrencyKey = copy.concurrencyKey,
                 timeoutSeconds = copy.timeoutSeconds,
                 maxRuntimeSeconds = copy.maxRuntimeSeconds,
-                userId = copy.userId,
+                subject = copy.subject,
+                runId = copy.runId,
+                tenantId = copy.tenantId,
             ))
         }
     }
@@ -201,8 +219,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     }
 
     /**
-     * Queues a job attributed to [userId], which defaults to the parent context's initiating user.
-     * Pass an explicit null to queue a system job without inheriting that attribution.
+     * Queues a job, inheriting its parent's trigger, subject, tenant, and run ID unless overridden.
+     * Independent jobs receive a new run ID. Use [JobTrigger.system] to clear inherited user attribution.
      */
     fun insertJob(
         spec: JobSpec,
@@ -216,7 +234,11 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         concurrencyKey: String? = null,
         timeoutSeconds: Int? = null,
         maxRuntimeSeconds: Int? = null,
-        userId: String? = parentJobContext?.userId,
+        trigger: JobTrigger = parentJobContext?.trigger
+            ?: if (spec is ScheduledJobSpec) JobTrigger.scheduled() else JobTrigger.system(),
+        subject: JobSubject? = parentJobContext?.subject,
+        tenantId: String? = parentJobContext?.tenantId,
+        runId: UUID = parentJobContext?.runId ?: UUID.randomUUID(),
     ): Long {
         var estimatedRuntimeSeconds: Int? = null
         if (maxEstimatedRuntimeRecords > 0) {
@@ -236,8 +258,6 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
         val resolvedLockKey = lockKey
             ?: (parentJobContext as? DispatchContext)?.jobRecord?.lockKey
-        val resolvedScheduledJob = (parentJobContext as? DispatchContext)?.jobRecord?.scheduledJob
-            ?: (spec is ScheduledJobSpec)
         val resolvedMaxConcurrentJobs = maxConcurrentJobs
             ?: (parentJobContext as? DispatchContext)?.jobRecord?.maxConcurrentJobs
             ?: spec.maxConcurrentJobs
@@ -268,7 +288,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 lastCheckInAt = null,
                 endedAt = null,
                 failureDetails = null,
-                scheduledJob = resolvedScheduledJob,
+                trigger = trigger,
                 lockKey = resolvedLockKey,
                 maxConcurrentJobs = resolvedMaxConcurrentJobs,
                 concurrencyKey = resolvedConcurrencyKey,
@@ -278,14 +298,16 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 maxRuntimeSeconds = maxRuntimeSeconds
                     ?: (parentJobContext as? DispatchContext)?.jobRecord?.maxRuntimeSeconds
                     ?: spec.maxRuntimeSeconds,
-                userId = userId,
+                subject = subject,
+                tenantId = tenantId,
+                runId = runId,
             )
             create(jobRecord)
             jobRecord.id
         }
     }
 
-    internal fun tryCaptureRunLock(jobId: Long, systemIdentifier: String, spec: JobSpec): JobRecord? {
+    internal fun tryCaptureRunLock(jobId: Long, systemIdentifier: String, spec: JobSpec, applicationVersion: String? = null): JobRecord? {
         return db {
             val jobRecord = findById(jobId) ?: return@db null
             if (jobRecord.state !in JobState.waitingStates) return@db null
@@ -319,6 +341,12 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                     stmt[state] = JobState.RUNNING
                     stmt[this@JobRecordsTable.systemIdentifier] = systemIdentifier
                     stmt[startedAt] = now
+                    stmt[this@JobRecordsTable.applicationVersion] = applicationVersion
+                    stmt[resultSummary] = null
+                    stmt[timeoutReason] = null
+                    stmt[processedCount] = null
+                    stmt[failedCount] = null
+                    stmt[totalCount] = null
                 }
             } catch (e: SQLException) {
                 if (e.isUniqueConstraint) {
@@ -371,7 +399,17 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         tryMarkEnded(jobRecordId, endedAt, state, failureDetails)
     }
 
-    internal fun tryMarkEnded(jobRecordId: Long, endedAt: Long, state: JobState, failureDetails: String? = null): Boolean {
+    internal fun tryMarkEnded(
+        jobRecordId: Long,
+        endedAt: Long,
+        state: JobState,
+        failureDetails: String? = null,
+        resultSummary: String? = failureDetails,
+        processedCount: Long? = null,
+        failedCount: Long? = null,
+        totalCount: Long? = null,
+    ): Boolean {
+        validateJobCounts(processedCount, failedCount, totalCount)
         return db {
             update({
                 (id eq jobRecordId) and (this@JobRecordsTable.state eq JobState.RUNNING)
@@ -379,6 +417,10 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 statement[this@JobRecordsTable.endedAt] = endedAt
                 statement[this@JobRecordsTable.state] = state
                 statement[this@JobRecordsTable.failureDetails] = failureDetails
+                statement[this@JobRecordsTable.resultSummary] = resultSummary
+                if (processedCount != null) statement[this@JobRecordsTable.processedCount] = processedCount
+                if (failedCount != null) statement[this@JobRecordsTable.failedCount] = failedCount
+                if (totalCount != null) statement[this@JobRecordsTable.totalCount] = totalCount
             } > 0
         }
     }
@@ -403,6 +445,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 statement[this@JobRecordsTable.endedAt] = endedAt
                 statement[this@JobRecordsTable.state] = JobState.TIMED_OUT
                 statement[this@JobRecordsTable.failureDetails] = failureDetails
+                statement[this@JobRecordsTable.resultSummary] = failureDetails
+                statement[this@JobRecordsTable.timeoutReason] = reason
             }
 
             result.singleOrNull()?.let(::map)
@@ -464,7 +508,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         val sql = """
             SELECT type,
                    BOOL_OR(state IN ($nonTerminatedIds)) AS has_non_terminated,
-                   MAX(ended_at) FILTER (WHERE scheduled_job AND state IN ($terminatedIds) AND ended_at IS NOT NULL) AS last_ended_at
+                   MAX(ended_at) FILTER (WHERE trigger_source = ${JobTriggerSource.SCHEDULE.id} AND state IN ($terminatedIds) AND ended_at IS NOT NULL) AS last_ended_at
             FROM $tableName
             WHERE type IN ($placeholders)
             GROUP BY type
@@ -492,6 +536,18 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             update({ id eq jobId }) { statement ->
                 statement[jobDetails] = details
             }
+        }
+    }
+
+    /** Saves a progress snapshot only while the attempt is running. */
+    internal fun updateProgress(jobId: Long, processedCount: Long?, failedCount: Long?, totalCount: Long?): Boolean {
+        validateJobCounts(processedCount, failedCount, totalCount)
+        return db {
+            update({ (id eq jobId) and (state eq JobState.RUNNING) }) { statement ->
+                statement[this@JobRecordsTable.processedCount] = processedCount
+                statement[this@JobRecordsTable.failedCount] = failedCount
+                statement[this@JobRecordsTable.totalCount] = totalCount
+            } > 0
         }
     }
 
@@ -553,7 +609,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             val terminatedStates = JobState.terminatedStates
             select(endedAt).where {
                 (type eq jobTypeIdentifier) and
-                    (scheduledJob eq true) and
+                    (trigger.source eq JobTriggerSource.SCHEDULE) and
                     (state inList terminatedStates) and
                     endedAt.isNotNull()
             }.orderBy(endedAt to SortOrder.DESC).limit(1)

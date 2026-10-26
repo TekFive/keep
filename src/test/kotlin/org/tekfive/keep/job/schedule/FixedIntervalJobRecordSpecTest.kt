@@ -7,11 +7,12 @@ import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobResult
 import org.tekfive.keep.job.JobState
 import org.tekfive.keep.job.JobCompleted
+import org.tekfive.keep.job.JobTrigger
 import org.tekfive.keep.json.query.QueryNode
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class FixedIntervalJobRecordSpecTest {
@@ -82,7 +83,8 @@ class FixedIntervalJobRecordSpecTest {
 
         assertNotNull(job)
         assertEquals("fixed-interval-test", job.type)
-        assertNull(job.userId)
+        assertEquals(JobTrigger.scheduled(), job.trigger)
+        assertNotEquals(job.runId, spec.schedule(1_000_000L).runId)
     }
 
     @Test

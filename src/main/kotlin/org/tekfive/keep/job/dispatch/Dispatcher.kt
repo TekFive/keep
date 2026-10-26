@@ -34,7 +34,7 @@ internal class Dispatcher(
             try {
                 val (jobId, jobSpec) = databaseGatekeeper { candidateQueue.take() }
                 val jobRecord = try {
-                    db { jobsTable.tryCaptureRunLock(jobId, systemIdentifier, jobSpec) }
+                    db { jobsTable.tryCaptureRunLock(jobId, systemIdentifier, jobSpec, jobConfiguration.applicationVersion) }
                 } catch (e: SQLException) {
                     log.warn("SQL exception occurred while trying to capture job record lock.", e)
                     databaseGatekeeper.onSQLException(e)
@@ -128,22 +128,26 @@ internal class Dispatcher(
                     if (!result.infoMessage.isNullOrBlank()) {
                         dispatchContext.log.info(result.infoMessage)
                     }
-                    ExecuteJobResult(ExecuteJobResultType.SUCCESS)
+                    ExecuteJobResult(ExecuteJobResultType.SUCCESS, resultSummary = result.infoMessage,
+                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
                 }
                 is JobWaiting -> {
                     if (!result.infoMessage.isNullOrBlank()) {
                         dispatchContext.log.info(result.infoMessage)
                     }
-                    ExecuteJobResult(ExecuteJobResultType.NEED_USER_INPUT)
+                    ExecuteJobResult(ExecuteJobResultType.NEED_USER_INPUT, resultSummary = result.infoMessage,
+                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
                 }
                 is JobFailed -> {
                     if (!result.errorMessage.isNullOrBlank()) {
                         dispatchContext.log.error(result.errorMessage)
                     }
                     if (result.retryIfAllowed) {
-                        ExecuteJobResult(ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED, result.errorMessage)
+                        ExecuteJobResult(ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED, result.errorMessage,
+                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
                     } else {
-                        ExecuteJobResult(ExecuteJobResultType.FAILED, result.errorMessage)
+                        ExecuteJobResult(ExecuteJobResultType.FAILED, result.errorMessage,
+                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
                     }
                 }
             }
@@ -184,16 +188,21 @@ internal class Dispatcher(
     internal fun finalizeJob(result: ExecuteJobResult, jobRecord: JobRecord, dispatchContext: DispatchContext?, jobSpec: JobSpec) {
         val endedAt = System.currentTimeMillis()
 
+        fun markEnded(state: JobState): Boolean = db {
+            jobsTable.tryMarkEnded(jobRecord.id, endedAt, state, result.failureDetails,
+                result.resultSummary, result.processedCount, result.failedCount, result.totalCount)
+        }
+
         when (result.type) {
             ExecuteJobResultType.ALREADY_TERMINATED -> {}
             ExecuteJobResultType.SUCCESS -> {
-                db { jobsTable.tryMarkEnded(jobRecord.id, endedAt, JobState.COMPLETED) }
+                markEnded(JobState.COMPLETED)
             }
             ExecuteJobResultType.NEED_USER_INPUT -> {
-                db { jobsTable.tryMarkEnded(jobRecord.id, endedAt, JobState.WAITING) }
+                markEnded(JobState.WAITING)
             }
             ExecuteJobResultType.FAILED -> {
-                db { jobsTable.tryMarkEnded(jobRecord.id, endedAt, JobState.FAILED, result.failureDetails) }
+                markEnded(JobState.FAILED)
             }
             ExecuteJobResultType.INTERRUPTED -> {
                 val requeued = db { jobsTable.tryRequeue(jobRecord.id) }
@@ -203,7 +212,7 @@ internal class Dispatcher(
             }
             ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED,
             ExecuteJobResultType.REDO_IMMEDIATELY_IF_ALLOWED -> {
-                val markedEnded = db { jobsTable.tryMarkEnded(jobRecord.id, endedAt, JobState.FAILED, result.failureDetails) }
+                val markedEnded = markEnded(JobState.FAILED)
                 if (markedEnded && dispatchContext != null && canRetry(dispatchContext, jobSpec)) {
                     scheduleRetry(dispatchContext, jobSpec)
                 }
@@ -258,7 +267,14 @@ internal class Dispatcher(
     }
 }
 
-internal class ExecuteJobResult(val type: ExecuteJobResultType, val failureDetails: String? = null)
+internal class ExecuteJobResult(
+    val type: ExecuteJobResultType,
+    val failureDetails: String? = null,
+    val resultSummary: String? = failureDetails,
+    val processedCount: Long? = null,
+    val failedCount: Long? = null,
+    val totalCount: Long? = null,
+)
 
 internal enum class ExecuteJobResultType {
     REDO_IMMEDIATELY_IF_ALLOWED,

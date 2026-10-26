@@ -16,11 +16,23 @@ CREATE TABLE IF NOT EXISTS job_records (
     last_checkin_at BIGINT,
     ended_at BIGINT,
     failure_details TEXT,
-    scheduled_job BOOLEAN NOT NULL DEFAULT FALSE,
+    trigger_source INT NOT NULL DEFAULT 1,
+    trigger_user_id TEXT,
     lock_key VARCHAR(255),
     max_concurrent_jobs INT,
     concurrency_key VARCHAR(255),
-    user_id TEXT
+    timeout_seconds INT,
+    max_runtime_seconds INT,
+    subject_type TEXT,
+    subject_id TEXT,
+    result_summary TEXT,
+    application_version TEXT,
+    run_id UUID NOT NULL DEFAULT gen_random_uuid(),
+    timeout_reason INT,
+    tenant_id TEXT,
+    processed_count BIGINT,
+    failed_count BIGINT,
+    total_count BIGINT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq
@@ -33,13 +45,25 @@ CREATE INDEX IF NOT EXISTS job_records_running_concurrency_scope_idx
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq
     ON job_records (type)
-    WHERE scheduled_job = TRUE AND state IN (1, 2);
+    WHERE trigger_source = 3 AND state IN (1, 2);
+
+CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx
+    ON job_records (priority DESC, created_at)
+    WHERE state = 1;
+
+CREATE INDEX IF NOT EXISTS job_records_type_state_idx
+    ON job_records (type, state);
+
+CREATE INDEX IF NOT EXISTS job_records_run_id_idx
+    ON job_records (run_id);
 
 CREATE TABLE IF NOT EXISTS job_record_logs (
     id BIGINT DEFAULT nextval('globalid') PRIMARY KEY,
-    job_record_id BIGINT NOT NULL REFERENCES job_records(id),
-    created_at BIGINT NOT NULL,
+    job_record_id BIGINT NOT NULL CONSTRAINT job_record_logs_job_record_id_fk REFERENCES job_records(id) ON DELETE NO ACTION,
     level INT NOT NULL,
     message TEXT NOT NULL,
     added_at BIGINT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS job_record_logs_job_record_id_ix
+    ON job_record_logs (job_record_id);

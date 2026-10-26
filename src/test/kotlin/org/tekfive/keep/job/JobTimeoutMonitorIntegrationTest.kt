@@ -74,6 +74,9 @@ class JobTimeoutMonitorIntegrationTest {
         assertEquals(JobState.TIMED_OUT, job.state)
         assertEquals(now, job.endedAt)
         assertTrue(job.failureDetails!!.contains("10 seconds"))
+        assertEquals(JobTimeoutReason.HEARTBEAT, job.timeoutReason)
+        assertEquals(job.failureDetails, job.resultSummary)
+        assertEquals(job.timeoutReason, spec.timedOutJob?.timeoutReason)
         assertEquals(jobId, spec.timedOutJob?.id)
         assertEquals(now, spec.timedOutAt)
         assertEquals(10, spec.timedOutAfterSeconds)
@@ -125,12 +128,19 @@ class JobTimeoutMonitorIntegrationTest {
         val spec = TimeoutSpec("runtime")
         val expired = runningJob(spec, 0L, 10_000L, timeoutSeconds = 0, maxRuntimeSeconds = 10)
         val active = runningJob(spec, 1L, 10_000L, maxRuntimeSeconds = 10)
+        JobRecordsTable.updateProgress(expired, 4, 1, 10)
 
         monitor(5, spec).sweep(10_000L)
 
         assertEquals(JobState.TIMED_OUT, load(expired).state)
         assertEquals(JobState.RUNNING, load(active).state)
         assertEquals(JobTimeoutReason.MAX_RUNTIME, spec.reason)
+        val timedOut = load(expired)
+        assertEquals(JobTimeoutReason.MAX_RUNTIME, timedOut.timeoutReason)
+        assertEquals(timedOut.timeoutReason, spec.timedOutJob?.timeoutReason)
+        assertEquals(4L, timedOut.processedCount)
+        assertEquals(1L, timedOut.failedCount)
+        assertEquals(10L, timedOut.totalCount)
         assertEquals("Job exceeded its maximum runtime of 10 seconds.", load(expired).failureDetails)
     }
 
@@ -247,6 +257,8 @@ class JobTimeoutMonitorIntegrationTest {
         assertEquals(JobState.RUNNING, pending.state)
         assertNull(pending.endedAt)
         assertNull(pending.failureDetails)
+        assertNull(pending.resultSummary)
+        assertNull(pending.timeoutReason)
         assertNull(pending.jobDetails)
 
         // Retry must survive losing all in-memory monitor state.
@@ -256,6 +268,7 @@ class JobTimeoutMonitorIntegrationTest {
 
         assertEquals(2, attempts)
         assertEquals(JobState.TIMED_OUT, load(jobId).state)
+        assertEquals(JobTimeoutReason.HEARTBEAT, load(jobId).timeoutReason)
         assertEquals(true, load(jobId).jobDetails?.get("cleaned")?.boolean)
     }
 

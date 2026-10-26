@@ -294,6 +294,9 @@ class JobCoordinator(
 
 internal class JobConfigurationGuard(val configuration: JobConfiguration) : JobConfiguration {
 
+    override val applicationVersion: String?
+        get() = configuration.applicationVersion
+
     override val dispatchCount: Int
         get() = configuration.dispatchCount.coerceAtLeast(0)
 

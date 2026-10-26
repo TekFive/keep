@@ -1351,31 +1351,73 @@ Job records support priority ordering, minimum start times, retry policies, lock
 Calling `coordinator.wakeUp()` after inserting a job ends the current poll wait early, so the new
 job is dispatched without waiting for `pollSeconds` to elapse.
 
-For work initiated by a user, pass their ID when inserting the job:
+For work initiated by a user, pass a trigger and optional reporting context:
 
 ```kotlin
 JobRecordsTable.insertJob(
     spec = SendReminderJob,
     details = mapOf("patientId" to patientId).toJsonObject(),
-    userId = currentUser.id,
+    trigger = JobTrigger.user(currentUser.id),
+    subject = JobSubject(subjectType = "patient", subjectId = patientId.toString()),
+    tenantId = tenantId,
 )
 ```
 
-The initiating user is stored as `JobRecord.userId` and available during execution as
-`JobContext.userId`. Retries and `launchCopy` preserve it. When `parentJobContext` is supplied,
-`insertJob` inherits its user ID unless `userId` is explicitly supplied; an explicit `null`
-clears attribution for the new job. Jobs without a user, including automatic scheduled runs,
-default to `null`. The calling application supplies the authenticated user's ID.
+`JobRecord.trigger` replaces `scheduledJob` and `userId`. A `JobTrigger` contains a `source`
+(`SYSTEM`, `USER`, `SCHEDULE`, or `EVENT`) and an optional `userId`. Use `JobTrigger.system()`,
+`user(id)`, `scheduled()`, or `event()`; user triggers require an ID. Scheduled and event triggers
+may also retain a user ID. Automatic scheduled runs use `SCHEDULE`, and ordinary inserts default
+to `SYSTEM` (or `SCHEDULE` for a scheduled spec). An explicit user trigger on a scheduled spec
+records a manual run. Scheduled-chain uniqueness and schedule history use the trigger source.
 
-Existing databases need the nullable `user_id` column before deploying the updated library:
+`subject: JobSubject?` groups `subjectType` and `subjectId`; `tenantId: String?` identifies the
+organization. Trigger and subject use ordinary SQL columns (`trigger_source`, `trigger_user_id`,
+`subject_type`, `subject_id`) so reports can filter them directly, including through
+`JobRecordsTable.trigger.source` and `JobRecordsTable.subject.subjectId`.
 
-```sql
-ALTER TABLE job_records ADD COLUMN user_id TEXT;
+Every independent job gets a UUID `runId`. Retries and `launchCopy` retain the run ID, trigger,
+subject, and tenant. `insertJob(parentJobContext = context)` inherits these values unless supplied
+explicitly. Pass `JobTrigger.system()` to clear inherited user attribution, explicit `null` to
+clear subject or tenant, or a new UUID to start another logical run. Each automatic scheduled run
+gets a new run ID. The same values are available through `JobContext` during execution.
+
+`applicationVersion` records the executing application's version when a worker captures an attempt:
+
+```kotlin
+val configuration = object : DefaultJobConfiguration() {
+    override val applicationVersion = "my-app-2.4.0"
+}
 ```
 
-Existing rows remain `NULL`. Applications whose `KeepSchema` includes `JobRecordsTable` can
-generate and apply this change with `PostgresMigrationGenerator`. Rebuild consuming applications
-because the job constructor and insertion method have new JVM signatures.
+Pass this configuration to `JobCoordinator`, or set `JOB_APPLICATION_VERSION` when using
+`AckJobConfiguration`. The version is nullable when unconfigured. A retry or recaptured job records
+the current worker's version; it does not inherit the previous attempt's version.
+
+`processedCount`, `failedCount`, and `totalCount` are nullable, nonnegative `Long` values per attempt.
+Processed means items attempted, including failures; null means unknown and zero means none.
+Use absolute counts when reporting progress, or supply final counts in a result:
+
+```kotlin
+context.updateProgress(processedCount = 25, failedCount = 2, totalCount = 100)
+return JobCompleted("Imported 98 records; 2 failed", processedCount = 100, failedCount = 2, totalCount = 100)
+```
+
+`updateProgress` retains omitted counts and clears explicitly null counts. Its writes participate in
+the caller's database transaction and only update a running attempt. `JobCompleted`, `JobWaiting`,
+and `JobFailed` accept final counts; omitted/null final counts preserve the last saved progress.
+Their existing info/error message becomes `resultSummary`. Summary and final counts commit with the
+terminal state. Retries, copies, and recaptures reset outcome fields and counts. Timeouts preserve
+saved progress and store `timeoutReason` (`HEARTBEAT` or `MAX_RUNTIME`) along with the timeout summary.
+
+Existing installations must apply [the reporting migration](src/main/resources/migrations/job-reporting.sql)
+once in a transaction, with the job schema on the search path, before deploying the updated code.
+Stop old workers first because the migration replaces their `scheduled_job` and `user_id` columns.
+It preserves initiating users and scheduled-chain membership and groups surviving linked retry
+attempts under one run ID. Missing parents and copies without an identifiable retry link cannot
+recover their original run grouping. Other new historical values remain null, except failure
+summaries copied from `failure_details`. A generated schema diff alone cannot perform this backfill.
+Fresh installations can use `jobs.sql` or the schema generators. Rebuild consuming applications
+and update calls that previously supplied `userId` or `scheduledJob`.
 
 #### Resilience
 
