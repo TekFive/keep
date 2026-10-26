@@ -181,16 +181,17 @@ internal class Dispatcher(
     }
 
     /**
-     * Moves [jobRecord] out of [JobState.RUNNING] according to [result]. The state change and any
-     * retry insert run in separate transactions: a failed retry insert must not roll back the
-     * state change, which would leave the record running.
+     * Finalization is fenced to the captured execution. A retry request commits with failure;
+     * inserting its next attempt is recoverable by any coordinator after an error or restart.
      */
     internal fun finalizeJob(result: ExecuteJobResult, jobRecord: JobRecord, dispatchContext: DispatchContext?, jobSpec: JobSpec) {
         val endedAt = System.currentTimeMillis()
 
-        fun markEnded(state: JobState): Boolean = db {
+        val executionToken = checkNotNull(jobRecord.executionToken)
+        fun markEnded(state: JobState, retryAt: Long? = null): Boolean = db {
             jobsTable.tryMarkEnded(jobRecord.id, endedAt, state, result.failureDetails,
-                result.resultSummary, result.processedCount, result.failedCount, result.totalCount)
+                result.resultSummary, result.processedCount, result.failedCount, result.totalCount,
+                expectedExecutionToken = executionToken, retryAt = retryAt)
         }
 
         when (result.type) {
@@ -205,44 +206,30 @@ internal class Dispatcher(
                 markEnded(JobState.FAILED)
             }
             ExecuteJobResultType.INTERRUPTED -> {
-                val requeued = db { jobsTable.tryRequeue(jobRecord.id) }
+                val requeued = db { jobsTable.tryRequeue(jobRecord.id, executionToken) }
                 if (requeued) {
                     log.info("Job {} of type {} was returned to pending after an interrupted dispatch.", jobRecord.id, jobRecord.type)
                 }
             }
             ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED,
             ExecuteJobResultType.REDO_IMMEDIATELY_IF_ALLOWED -> {
-                val markedEnded = markEnded(JobState.FAILED)
-                if (markedEnded && dispatchContext != null && canRetry(dispatchContext, jobSpec)) {
-                    scheduleRetry(dispatchContext, jobSpec)
-                }
+                val retryAt = if (dispatchContext != null && canRetry(dispatchContext, jobSpec)) {
+                    val seconds = (jobSpec.minSecondsBetweenRetries ?: jobConfiguration.defaultMinSecondsBetweenJobRetry).coerceAtLeast(0)
+                    endedAt + seconds * 1000L
+                } else null
+                if (markEnded(JobState.FAILED, retryAt) && retryAt != null) scheduleRetry(jobRecord.id)
             }
         }
     }
 
-    private fun scheduleRetry(dispatchContext: DispatchContext, jobSpec: JobSpec) {
-        val minSeconds = (jobSpec.minSecondsBetweenRetries ?: jobConfiguration.defaultMinSecondsBetweenJobRetry)
-        val minStartAt = if (minSeconds > 0) {
-            minSeconds * 1000L + System.currentTimeMillis()
-        } else {
-            null
-        }
-
+    private fun scheduleRetry(jobId: Long) {
         try {
-            databaseGatekeeper.keepTrying {
-                db {
-                    jobsTable.insertJob(
-                        jobSpec,
-                        parentJobContext = dispatchContext,
-                        minStartAt = minStartAt,
-                        maxEstimatedRuntimeRecords = jobConfiguration.maxEstimatedRuntimeRecords,
-                    )
-                }
-            }
+            jobsTable.enqueueRetry(jobId)
         } catch (e: SQLException) {
-            log.error("Unable to insert retry job for {}; the retry is lost.", dispatchContext.jobRecord.id, e)
+            databaseGatekeeper.onSQLException(e)
+            log.warn("Unable to enqueue retry for {}; its saved request will be recovered by the coordinator.", jobId, e)
         } catch (e: Exception) {
-            log.error("Unable to prepare retry job for {}; the retry is lost.", dispatchContext.jobRecord.id, e)
+            log.warn("Unable to enqueue retry for {}; its saved request will be recovered by the coordinator.", jobId, e)
         }
     }
 

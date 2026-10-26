@@ -961,7 +961,7 @@ class JobRecordCoordinatorIntegrationTest {
     }
 
     @Test
-    fun `failure to schedule a retry does not leave the job running`() {
+    fun `retry creation does not depend on runtime estimation`() {
         val config = createConfig(dispatchCount = 1, maxEstimatedRuntimeRecords = 5)
         val latch = CountDownLatch(1)
 
@@ -992,10 +992,37 @@ class JobRecordCoordinatorIntegrationTest {
             assertTrue(latch.await(15, TimeUnit.SECONDS), "Job was not executed within timeout")
             val record = awaitJobState(jobId, JobState.FAILED.id)
             assertEquals("boom", record["failure_details"])
-            Thread.sleep(1_500)
-            assertEquals(1, countJobs("broken-retry"), "No retry record can be created when retry preparation fails")
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (countJobs("broken-retry") < 3 && System.nanoTime() < deadline) Thread.sleep(20)
+            assertEquals(3, countJobs("broken-retry"), "Both retries must survive optional estimation failures")
         } finally {
             coordinator.stop(waitForStop = true)
         }
     }
+    @Test
+    fun `all dispatchers start and execute work without waiting for another poll`() {
+        val workerCount = 8
+        val started = CountDownLatch(workerCount)
+        val release = CountDownLatch(1)
+        val spec = createSpec(typeId = "pool-startup") {
+            object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    started.countDown()
+                    assertTrue(release.await(10, TimeUnit.SECONDS))
+                    return JobCompleted()
+                }
+            }
+        }
+        repeat(workerCount) { insertJob(spec) }
+        val registry = JobRegistry().apply { register(spec) }
+        val coordinator = JobCoordinator("pool-worker", registry, createConfig(pollSeconds = 60, dispatchCount = workerCount))
+        try {
+            coordinator.start()
+            assertTrue(started.await(5, TimeUnit.SECONDS), "All workers must be registered before they start")
+        } finally {
+            release.countDown()
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
 }

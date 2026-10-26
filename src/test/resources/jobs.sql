@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS job_records (
     tenant_id TEXT,
     processed_count BIGINT,
     failed_count BIGINT,
-    total_count BIGINT
+    total_count BIGINT,
+    execution_token UUID,
+    retry_at BIGINT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq
@@ -45,7 +47,7 @@ CREATE INDEX IF NOT EXISTS job_records_running_concurrency_scope_idx
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq
     ON job_records (type)
-    WHERE trigger_source = 3 AND state IN (1, 2);
+    WHERE trigger_source = 3 AND (state IN (1, 2) OR retry_at IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx
     ON job_records (priority DESC, created_at)
@@ -56,6 +58,16 @@ CREATE INDEX IF NOT EXISTS job_records_type_state_idx
 
 CREATE INDEX IF NOT EXISTS job_records_run_id_idx
     ON job_records (run_id);
+
+CREATE INDEX IF NOT EXISTS job_records_retry_pending_idx
+    ON job_records (type) WHERE retry_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS job_heartbeats (
+    job_record_id BIGINT PRIMARY KEY CONSTRAINT job_heartbeats_job_record_id_fk
+        REFERENCES job_records(id) ON DELETE CASCADE ON UPDATE RESTRICT,
+    execution_token UUID NOT NULL,
+    last_checkin_at BIGINT
+);
 
 CREATE TABLE IF NOT EXISTS job_record_logs (
     id BIGINT DEFAULT nextval('globalid') PRIMARY KEY,

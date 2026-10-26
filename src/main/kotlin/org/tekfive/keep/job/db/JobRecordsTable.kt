@@ -26,7 +26,6 @@ import org.tekfive.keep.data.dataEnum
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.db.dbConnection
-import org.tekfive.keep.db.inDbTransaction
 import org.tekfive.keep.data.addedAt
 import org.tekfive.keep.data.createdAt
 import org.tekfive.keep.data.uniqueConstraint
@@ -38,6 +37,7 @@ import org.tekfive.keep.job.JobSubject
 import org.tekfive.keep.job.JobTrigger
 import org.tekfive.keep.job.JobTriggerSource
 import org.tekfive.keep.job.validateJobCounts
+import org.tekfive.keep.job.dispatch.JobOwnershipLostException
 import org.tekfive.keep.job.dispatch.DispatchContext
 import org.tekfive.keep.job.schedule.ScheduledJobSpec
 import org.tekfive.keep.json.jsonObject
@@ -77,6 +77,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val processedCount = long("processed_count").nullable()
     val failedCount = long("failed_count").nullable()
     val totalCount = long("total_count").nullable()
+    val executionToken = javaUUID("execution_token").nullable()
+    val retryAt = long("retry_at").nullable()
 
     override val postgresObjects = postgresObjects {
         index("job_records_running_type_lock_key_uq", type, lockKey, unique = true,
@@ -84,42 +86,42 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         index("job_records_running_concurrency_scope_idx", type, concurrencyKey,
             predicate = SqlExpression("state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL"))
         index("job_records_scheduled_chain_type_uq", type, unique = true,
-            predicate = SqlExpression("trigger_source = ${JobTriggerSource.SCHEDULE.id} AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})"))
+            predicate = SqlExpression("trigger_source = ${JobTriggerSource.SCHEDULE.id} AND (state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id}) OR retry_at IS NOT NULL)"))
         index("job_records_pending_priority_created_idx", listOf(priority.indexKey(SortOrder.DESC), createdAt.indexKey()),
             predicate = SqlExpression("state = ${JobState.PENDING.id}"))
         index("job_records_type_state_idx", type, state)
         index("job_records_run_id_idx", runId)
+        index("job_records_retry_pending_idx", type, predicate = SqlExpression("retry_at IS NOT NULL"))
     }
 
-    fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord {
-        return db {
-            create(JobRecord(
-                copy.type,
-                now,
-                copy.priority,
-                copy.parentJobId,
-                null,
-                copy.attempt + 1,
-                copy.estimatedRuntimeSeconds,
-                copy.state,
-                copy.jobDetails,
-                null,
-                null,
-                null,
-                null,
-                null,
-                trigger = copy.trigger,
-                lockKey = copy.lockKey,
-                maxConcurrentJobs = copy.maxConcurrentJobs,
-                concurrencyKey = copy.concurrencyKey,
-                timeoutSeconds = copy.timeoutSeconds,
-                maxRuntimeSeconds = copy.maxRuntimeSeconds,
-                subject = copy.subject,
-                runId = copy.runId,
-                tenantId = copy.tenantId,
-            ))
-        }
-    }
+    fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord =
+        create(copyForExecution(copy, now))
+
+    private fun copyForExecution(copy: JobRecord, now: Long, minimumStartAt: Long? = null): JobRecord =
+        JobRecord(
+            type = copy.type,
+            createdAt = now,
+            priority = copy.priority,
+            parentJobId = copy.id,
+            minimumStartAt = minimumStartAt,
+            attempt = copy.attempt + 1,
+            estimatedRuntimeSeconds = copy.estimatedRuntimeSeconds,
+            state = JobState.PENDING,
+            jobDetails = copy.jobDetails,
+            systemIdentifier = null,
+            startedAt = null,
+            lastCheckInAt = null,
+            endedAt = null,
+            trigger = copy.trigger,
+            lockKey = copy.lockKey,
+            maxConcurrentJobs = copy.maxConcurrentJobs,
+            concurrencyKey = copy.concurrencyKey,
+            timeoutSeconds = copy.timeoutSeconds,
+            maxRuntimeSeconds = copy.maxRuntimeSeconds,
+            subject = copy.subject,
+            runId = copy.runId,
+            tenantId = copy.tenantId,
+        )
 
     /**
      * Returns the ids and types of the records that are the best candidates to start now, ordered
@@ -133,8 +135,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
      *   scope (records of the same [type] with the same [concurrencyKey], or every record of the
      *   type when the candidate has no [concurrencyKey]).
      *
-     * A null [maxConcurrentJobs] is not filtered on: the spec-level default is unknown here, so the
-     * limit is left to [tryCaptureRunLock].
+     * Limits held by running jobs also apply when the candidate falls within their scope.
+     * A candidate's null [maxConcurrentJobs] leaves its spec-level check to [tryCaptureRunLock].
      *
      * [excludeIds] removes already-known ids (for example, ids the caller has queued) from the
      * result.
@@ -179,6 +181,17 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                     AND (candidate.concurrency_key IS NULL OR scope_member.concurrency_key = candidate.concurrency_key)
                 )
             )
+            AND NOT EXISTS (
+                SELECT 1 FROM $tableName holder
+                WHERE holder.type = candidate.type AND holder.state = ${JobState.RUNNING.id}
+                AND holder.max_concurrent_jobs IS NOT NULL
+                AND (holder.concurrency_key IS NULL OR holder.concurrency_key = candidate.concurrency_key)
+                AND holder.max_concurrent_jobs <= (
+                    SELECT COUNT(*) FROM $tableName member
+                    WHERE member.type = candidate.type AND member.state = ${JobState.RUNNING.id}
+                    AND (holder.concurrency_key IS NULL OR member.concurrency_key = holder.concurrency_key)
+                )
+            )
             ORDER BY candidate.priority DESC, candidate.created_at ASC
             LIMIT ?
         """.trimIndent()
@@ -212,9 +225,15 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
 
         return db {
-            selectAll().where {
+            leftJoin(JobHeartbeatsTable).select(columns + JobHeartbeatsTable.columns).where {
                 (state eq JobState.RUNNING) and (type inList jobTypeIds)
-            }.map(::map)
+            }.map { row ->
+                map(row).also { job ->
+                    if (row.getOrNull(JobHeartbeatsTable.executionToken) == job.executionToken) {
+                        job.lastCheckInAt = row.getOrNull(JobHeartbeatsTable.lastCheckInAt) ?: job.lastCheckInAt
+                    }
+                }
+            }
         }
     }
 
@@ -241,7 +260,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         runId: UUID = parentJobContext?.runId ?: UUID.randomUUID(),
     ): Long {
         var estimatedRuntimeSeconds: Int? = null
-        if (maxEstimatedRuntimeRecords > 0) {
+        if (spec.estimateRuntime && maxEstimatedRuntimeRecords > 0) {
             if (parentJobContext?.estimatedRuntimeSeconds != null) {
                 estimatedRuntimeSeconds = parentJobContext.estimatedRuntimeSeconds
             } else if (details != null) {
@@ -309,19 +328,27 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
     internal fun tryCaptureRunLock(jobId: Long, systemIdentifier: String, spec: JobSpec, applicationVersion: String? = null): JobRecord? {
         return db {
+            // Every capture participates, even an unlimited/keyed job: its count can affect a
+            // type-wide limit held by another running job. Acquire before reading the counts.
+            captureConcurrencyScopeLock("job:${spec.jobTypeIdentifier}")
             val jobRecord = findById(jobId) ?: return@db null
-            if (jobRecord.state !in JobState.waitingStates) return@db null
+            if (jobRecord.type != spec.jobTypeIdentifier || jobRecord.state !in JobState.waitingStates) return@db null
 
             val maxConcurrentJobs = jobRecord.maxConcurrentJobs ?: spec.maxConcurrentJobs
-            if (maxConcurrentJobs != null) {
-                require(maxConcurrentJobs > 0) { "Max concurrent jobs must be greater than 0." }
-
-                val scope = concurrencyScope(spec.jobTypeIdentifier, jobRecord.concurrencyKey)
-                captureConcurrencyScopeLock(scope)
-                if (countRunningJobs(spec.jobTypeIdentifier, jobRecord.concurrencyKey) >= maxConcurrentJobs) {
-                    return@db null
-                }
-            }
+            require(maxConcurrentJobs == null || maxConcurrentJobs > 0) { "Max concurrent jobs must be greater than 0." }
+            val running = select(this@JobRecordsTable.maxConcurrentJobs, concurrencyKey).where {
+                (type eq jobRecord.type) and (state eq JobState.RUNNING)
+            }.toList()
+            val countsByKey = running.groupingBy { it[concurrencyKey] }.eachCount()
+            fun countInScope(key: String?): Int = if (key == null) running.size else countsByKey[key] ?: 0
+            if (spec.exclusiveExecution && running.isNotEmpty()) return@db null
+            if (maxConcurrentJobs != null && countInScope(jobRecord.concurrencyKey) >= maxConcurrentJobs) return@db null
+            // Respect limits already promised to jobs whose scope includes this candidate.
+            if (running.any { row ->
+                val limit = row[this@JobRecordsTable.maxConcurrentJobs]
+                val key = row[concurrencyKey]
+                limit != null && (key == null || key == jobRecord.concurrencyKey) && countInScope(key) >= limit
+            }) return@db null
 
             val concurrencyPredicate: Op<Boolean>? = if (jobRecord.lockKey != null) {
                 val lockKey = jobRecord.lockKey
@@ -341,7 +368,13 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                     stmt[state] = JobState.RUNNING
                     stmt[this@JobRecordsTable.systemIdentifier] = systemIdentifier
                     stmt[startedAt] = now
+                    stmt[lastCheckInAt] = null
+                    stmt[endedAt] = null
+                    stmt[failureDetails] = null
+                    stmt[executionToken] = UUID.randomUUID()
+                    stmt[this@JobRecordsTable.maxConcurrentJobs] = maxConcurrentJobs
                     stmt[this@JobRecordsTable.applicationVersion] = applicationVersion
+                    // A requeued record starts its reporting counters again when it is recaptured.
                     stmt[resultSummary] = null
                     stmt[timeoutReason] = null
                     stmt[processedCount] = null
@@ -355,15 +388,20 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 throw e
             }
 
-            rows.singleOrNull()?.let { map(it) }
-        }
-    }
-
-    private fun concurrencyScope(jobTypeIdentifier: String, concurrencyKey: String?): String {
-        return if (concurrencyKey == null) {
-            "job:$jobTypeIdentifier"
-        } else {
-            "job:$jobTypeIdentifier:$concurrencyKey"
+            rows.singleOrNull()?.let { row ->
+                map(row).also { job ->
+                    dbConnection().prepareStatement("""
+                        INSERT INTO ${JobHeartbeatsTable.tableName} (job_record_id, execution_token, last_checkin_at)
+                        VALUES (?, ?, NULL)
+                        ON CONFLICT (job_record_id) DO UPDATE
+                        SET execution_token = EXCLUDED.execution_token, last_checkin_at = NULL
+                    """.trimIndent()).use { statement ->
+                        statement.setLong(1, job.id)
+                        statement.setObject(2, job.executionToken)
+                        statement.executeUpdate()
+                    }
+                }
+            }
         }
     }
 
@@ -371,27 +409,6 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         dbConnection().prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))").use { statement ->
             statement.setString(1, scope)
             statement.execute()
-        }
-    }
-
-    private fun countRunningJobs(jobTypeIdentifier: String, concurrencyKey: String?): Int {
-        val sql = if (concurrencyKey == null) {
-            "SELECT COUNT(*) FROM $tableName WHERE type = ? AND state = ?"
-        } else {
-            "SELECT COUNT(*) FROM $tableName WHERE type = ? AND state = ? AND concurrency_key = ?"
-        }
-
-        dbConnection().prepareStatement(sql).use { statement ->
-            statement.setString(1, jobTypeIdentifier)
-            statement.setInt(2, JobState.RUNNING.id)
-            if (concurrencyKey != null) {
-                statement.setString(3, concurrencyKey)
-            }
-
-            statement.executeQuery().use { result ->
-                result.next()
-                return result.getInt(1)
-            }
         }
     }
 
@@ -408,16 +425,24 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         processedCount: Long? = null,
         failedCount: Long? = null,
         totalCount: Long? = null,
+        expectedExecutionToken: UUID? = null,
+        retryAt: Long? = null,
     ): Boolean {
         validateJobCounts(processedCount, failedCount, totalCount)
         return db {
+            val heartbeatAt = JobHeartbeatsTable.innerJoin(this@JobRecordsTable)
+                .select(JobHeartbeatsTable.lastCheckInAt).where {
+                    (id eq jobRecordId) and (JobHeartbeatsTable.executionToken eq executionToken)
+                }.singleOrNull()?.get(JobHeartbeatsTable.lastCheckInAt)
             update({
-                (id eq jobRecordId) and (this@JobRecordsTable.state eq JobState.RUNNING)
+                runningExecution(jobRecordId, expectedExecutionToken)
             }) { statement ->
+                if (heartbeatAt != null) statement[lastCheckInAt] = heartbeatAt
                 statement[this@JobRecordsTable.endedAt] = endedAt
                 statement[this@JobRecordsTable.state] = state
                 statement[this@JobRecordsTable.failureDetails] = failureDetails
                 statement[this@JobRecordsTable.resultSummary] = resultSummary
+                statement[this@JobRecordsTable.retryAt] = retryAt
                 if (processedCount != null) statement[this@JobRecordsTable.processedCount] = processedCount
                 if (failedCount != null) statement[this@JobRecordsTable.failedCount] = failedCount
                 if (totalCount != null) statement[this@JobRecordsTable.totalCount] = totalCount
@@ -425,42 +450,56 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         }
     }
 
-    internal fun tryMarkTimedOut(jobRecordId: Long, cutoffAt: Long, endedAt: Long, failureDetails: String? = null, reason: JobTimeoutReason = JobTimeoutReason.HEARTBEAT): JobRecord? {
-        return db {
-            // Recheck in SQL: heartbeats can extend only the heartbeat deadline; completed jobs stay terminal.
-            val timedOutPredicate = when (reason) {
-                JobTimeoutReason.HEARTBEAT ->
-                    ((lastCheckInAt.isNotNull()) and (lastCheckInAt lessEq cutoffAt)) or
-                        ((lastCheckInAt.isNull()) and (startedAt.isNotNull()) and (startedAt lessEq cutoffAt))
-                JobTimeoutReason.MAX_RUNTIME -> (startedAt.isNotNull()) and (startedAt lessEq cutoffAt)
+    internal fun tryMarkTimedOut(jobRecordId: Long, cutoffAt: Long, endedAt: Long, failureDetails: String? = null,
+        reason: JobTimeoutReason = JobTimeoutReason.HEARTBEAT, expectedExecutionToken: UUID? = null): JobRecord? = db {
+        // Never wait on a business transaction that may be about to check in. Lock the job
+        // first, then its heartbeat, and recheck using a fresh snapshot after both locks.
+        if (!lockRunningJob(jobRecordId)) return@db null
+        val heartbeat = dbConnection().prepareStatement(
+            "SELECT execution_token, last_checkin_at FROM ${JobHeartbeatsTable.tableName} WHERE job_record_id = ? FOR UPDATE"
+        ).use { statement ->
+            statement.setLong(1, jobRecordId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getObject(1, UUID::class.java) to rs.getLong(2).let { if (rs.wasNull()) null else it }
+                else null
             }
-
-            val result = updateReturning(
-                where = {
-                    (id eq jobRecordId) and
-                        (state eq JobState.RUNNING) and
-                        timedOutPredicate
-                }
-            ) { statement ->
-                statement[this@JobRecordsTable.endedAt] = endedAt
-                statement[this@JobRecordsTable.state] = JobState.TIMED_OUT
-                statement[this@JobRecordsTable.failureDetails] = failureDetails
-                statement[this@JobRecordsTable.resultSummary] = failureDetails
-                statement[this@JobRecordsTable.timeoutReason] = reason
-            }
-
-            result.singleOrNull()?.let(::map)
         }
+        val job = selectAll().where { id eq jobRecordId }.single().let(::map)
+        if (expectedExecutionToken != null && job.executionToken != expectedExecutionToken) return@db null
+        val latestCheckIn = if (heartbeat?.first == job.executionToken) heartbeat?.second ?: job.lastCheckInAt else job.lastCheckInAt
+        val activityAt = if (reason == JobTimeoutReason.MAX_RUNTIME) job.startedAt else latestCheckIn ?: job.startedAt
+        if (activityAt == null || activityAt > cutoffAt) return@db null
+
+        updateReturning(where = { runningExecution(jobRecordId, expectedExecutionToken) }) { statement ->
+            statement[this@JobRecordsTable.endedAt] = endedAt
+            statement[state] = JobState.TIMED_OUT
+            statement[this@JobRecordsTable.failureDetails] = failureDetails
+            statement[resultSummary] = failureDetails
+            statement[timeoutReason] = reason
+            statement[lastCheckInAt] = latestCheckIn
+        }.singleOrNull()?.let(::map)
+    }
+
+    private fun lockRunningJob(jobId: Long): Boolean = dbConnection().prepareStatement(
+        "SELECT id FROM $tableName WHERE id = ? AND state = ${JobState.RUNNING.id} FOR UPDATE SKIP LOCKED"
+    ).use { statement ->
+        statement.setLong(1, jobId)
+        statement.executeQuery().use { it.next() }
+    }
+
+    private fun runningExecution(jobId: Long, expectedExecutionToken: UUID?): Op<Boolean> {
+        val running = (id eq jobId) and (state eq JobState.RUNNING)
+        return if (expectedExecutionToken == null) running else running and (executionToken eq expectedExecutionToken)
     }
 
     /**
      * Returns a [JobState.RUNNING] record to [JobState.PENDING] so another dispatcher can pick it
      * up. Used when a dispatcher was interrupted before the job could complete.
      */
-    internal fun tryRequeue(jobRecordId: Long): Boolean {
+    internal fun tryRequeue(jobRecordId: Long, expectedExecutionToken: UUID? = null): Boolean {
         return db {
             update({
-                (id eq jobRecordId) and (this@JobRecordsTable.state eq JobState.RUNNING)
+                runningExecution(jobRecordId, expectedExecutionToken)
             }) { statement ->
                 statement[this@JobRecordsTable.state] = JobState.PENDING
                 statement[this@JobRecordsTable.systemIdentifier] = null
@@ -507,7 +546,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         val placeholders = jobTypeIdentifiers.joinToString(",") { "?" }
         val sql = """
             SELECT type,
-                   BOOL_OR(state IN ($nonTerminatedIds)) AS has_non_terminated,
+                   BOOL_OR(state IN ($nonTerminatedIds) OR retry_at IS NOT NULL) AS has_non_terminated,
                    MAX(ended_at) FILTER (WHERE trigger_source = ${JobTriggerSource.SCHEDULE.id} AND state IN ($terminatedIds) AND ended_at IS NOT NULL) AS last_ended_at
             FROM $tableName
             WHERE type IN ($placeholders)
@@ -531,19 +570,23 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
     data class ScheduleState(val hasNonTerminatedJob: Boolean, val lastEndedScheduledAt: Long?)
 
-    internal fun updateJobDetails(jobId: Long, details: JsonObject) {
-        db {
-            update({ id eq jobId }) { statement ->
+    internal fun getJobDetails(jobId: Long): JsonObject? = db {
+        select(jobDetails).where { id eq jobId }.single()[jobDetails]
+    }
+
+    internal fun updateJobDetails(jobId: Long, details: JsonObject, expectedExecutionToken: UUID? = null): Boolean {
+        return db {
+            update({ if (expectedExecutionToken == null) id eq jobId else runningExecution(jobId, expectedExecutionToken) }) { statement ->
                 statement[jobDetails] = details
-            }
+            } > 0
         }
     }
 
     /** Saves a progress snapshot only while the attempt is running. */
-    internal fun updateProgress(jobId: Long, processedCount: Long?, failedCount: Long?, totalCount: Long?): Boolean {
+    internal fun updateProgress(jobId: Long, processedCount: Long?, failedCount: Long?, totalCount: Long?, expectedExecutionToken: UUID? = null): Boolean {
         validateJobCounts(processedCount, failedCount, totalCount)
         return db {
-            update({ (id eq jobId) and (state eq JobState.RUNNING) }) { statement ->
+            update({ runningExecution(jobId, expectedExecutionToken) }) { statement ->
                 statement[this@JobRecordsTable.processedCount] = processedCount
                 statement[this@JobRecordsTable.failedCount] = failedCount
                 statement[this@JobRecordsTable.totalCount] = totalCount
@@ -552,54 +595,88 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     }
 
     /**
-     * Records a check-in for [jobId] and returns the record's current state, or null when no record
-     * has that id.
-     *
-     * A job may run its whole body inside one transaction, which would hide its check-ins from the
-     * timeout monitor until that transaction commits. When called from inside a transaction the
-     * update is therefore committed immediately on a separate connection.
+     * Commits the heartbeat independently of a job's business transaction. The mirror on
+     * job_records is updated only when that row is unlocked; timeout decisions use job_heartbeats.
      */
-    internal fun updateLastCheckIn(jobId: Long, checkInAt: Long): JobState? {
-        if (inDbTransaction()) {
-            return updateLastCheckInOnNewConnection(jobId, checkInAt)
-        }
-
-        return db {
-            val result = updateReturning(
-                returning = listOf(state),
-                where = {
-                    id eq jobId
-                }
-            ) { statement ->
-                statement[lastCheckInAt] = checkInAt
-            }
-
-            result.firstOrNull()?.let { it[state] }
-        }
-    }
-
-    /** Commits a check-in outside of the caller's transaction so it is visible immediately. */
-    private fun updateLastCheckInOnNewConnection(jobId: Long, checkInAt: Long): JobState? {
-        val sql = "UPDATE $tableName SET last_checkin_at = ? WHERE id = ? RETURNING state"
-
+    internal fun updateLastCheckIn(jobId: Long, checkInAt: Long, expectedExecutionToken: UUID? = null): JobState? {
         DbConnection.createConnection().use { connection ->
-            connection.autoCommit = true
-            connection.prepareStatement(sql).use { statement ->
-                statement.setLong(1, checkInAt)
-                statement.setLong(2, jobId)
-                statement.executeQuery().use { rs ->
-                    return if (rs.next()) JobState.map(rs.getInt(1)) else null
+            connection.autoCommit = false
+            try {
+                fun currentExecution(): Pair<JobState, UUID?>? = connection.prepareStatement(
+                    "SELECT state, execution_token FROM $tableName WHERE id = ?"
+                ).use { statement ->
+                    statement.setLong(1, jobId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) JobState.map(rs.getInt(1)) to rs.getObject(2, UUID::class.java) else null
+                    }
                 }
+                fun checkOwnership(current: Pair<JobState, UUID?>?) {
+                    if (current != null && expectedExecutionToken != null && current.second != expectedExecutionToken) {
+                        throw JobOwnershipLostException(jobId)
+                    }
+                }
+                val current = currentExecution()
+                checkOwnership(current)
+                if (current == null || current.first != JobState.RUNNING) return current?.first
+                val token = current.second ?: throw JobOwnershipLostException(jobId)
+                val updated = connection.prepareStatement("""
+                    UPDATE ${JobHeartbeatsTable.tableName}
+                    SET last_checkin_at = GREATEST(last_checkin_at, ?)
+                    WHERE job_record_id = ? AND execution_token = ?
+                """.trimIndent()).use { statement ->
+                    statement.setLong(1, checkInAt)
+                    statement.setLong(2, jobId)
+                    statement.setObject(3, token)
+                    statement.executeUpdate()
+                }
+                if (updated == 0) throw JobOwnershipLostException(jobId)
+                // SKIP LOCKED is essential: this connection must never wait for the caller's
+                // transaction, nor for a timeout transaction that is locking the heartbeat.
+                connection.prepareStatement("""
+                    WITH unlocked AS (
+                        SELECT id FROM $tableName WHERE id = ? AND state = ${JobState.RUNNING.id}
+                        AND execution_token = ? FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE $tableName job SET last_checkin_at = GREATEST(job.last_checkin_at, ?)
+                    FROM unlocked WHERE job.id = unlocked.id
+                """.trimIndent()).use { statement ->
+                    statement.setLong(1, jobId)
+                    statement.setObject(2, token)
+                    statement.setLong(3, checkInAt)
+                    statement.executeUpdate()
+                }
+                val latest = currentExecution()
+                checkOwnership(latest)
+                connection.commit()
+                return latest?.first
+            } catch (e: Throwable) {
+                connection.rollback()
+                throw e
             }
         }
     }
 
+    /** Reads durable requests, including future retries which can be queued immediately. */
+    internal fun getRetryCandidates(jobTypeIds: List<String>): List<Long> = db {
+        if (jobTypeIds.isEmpty()) emptyList() else select(id).where {
+            (type inList jobTypeIds) and (state eq JobState.FAILED) and retryAt.isNotNull()
+        }.orderBy(id).map { it[id] }
+    }
+
+    /** Claim, clear the request, and insert its retry in one transaction. Safe to call again. */
+    internal fun enqueueRetry(jobId: Long): JobRecord? = db {
+        val parent = selectAll().where { (id eq jobId) and (state eq JobState.FAILED) and retryAt.isNotNull() }
+            .forUpdate().singleOrNull()?.let(::map) ?: return@db null
+        // Release scheduled-chain uniqueness before the insert; both changes commit together.
+        update({ id eq jobId }) { it[retryAt] = null }
+        create(copyForExecution(parent, DbConnection.transactionAt, parent.retryAt))
+    }
 
     fun hasNonTerminatedJob(jobTypeIdentifier: String): Boolean {
         return db {
             val nonTerminatedStates = JobState.entries.filter { !it.terminated }
             select(id).where {
-                (type eq jobTypeIdentifier) and (state inList nonTerminatedStates)
+                (type eq jobTypeIdentifier) and ((state inList nonTerminatedStates) or retryAt.isNotNull())
             }.limit(1).any()
         }
     }

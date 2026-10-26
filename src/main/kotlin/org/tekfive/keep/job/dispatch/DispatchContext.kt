@@ -27,6 +27,8 @@ internal class DispatchContext(
 ) : JobContext {
 
     override val jobId: Long = jobRecord.id
+    private val executionToken: UUID
+        get() = checkNotNull(jobRecord.executionToken) { "The job must be captured before it can report progress." }
     override val trigger: JobTrigger = jobRecord.trigger
     override val subject: JobSubject? = jobRecord.subject
     override val runId: UUID = jobRecord.runId
@@ -41,7 +43,8 @@ internal class DispatchContext(
     override val attempt: Int = jobRecord.attempt
     override val maxRetries: Int = jobSpec.maxRetriesOnFailure
     override val estimatedRuntimeSeconds: Int? = jobRecord.estimatedRuntimeSeconds
-    override val details: JsonObject? = jobRecord.jobDetails
+    override val details: JsonObject?
+        get() = jobsTable.getJobDetails(jobId)
     override val log: JobLogger = JobLogger(job, this, minSaveLogLevel)
 
 
@@ -56,16 +59,15 @@ internal class DispatchContext(
         private set
 
     override fun updateDetails(details: JsonObject) {
-        db { jobsTable.updateJobDetails(jobRecord.id, details) }
+        db {
+            if (!jobsTable.updateJobDetails(jobId, details, executionToken)) throwOwnershipLost()
+        }
     }
 
     @Synchronized
     override fun updateProgress(processedCount: Long?, failedCount: Long?, totalCount: Long?) {
         db {
-            if (!jobsTable.updateProgress(jobId, processedCount, failedCount, totalCount)) {
-                val current = jobsTable.findById(jobId) ?: throw JobNotFoundException(jobId)
-                throw TerminatedStateException(current.state)
-            }
+            if (!jobsTable.updateProgress(jobId, processedCount, failedCount, totalCount, executionToken)) throwOwnershipLost()
         }
         jobRecord.processedCount = processedCount
         jobRecord.failedCount = failedCount
@@ -75,9 +77,8 @@ internal class DispatchContext(
     @Synchronized
     override fun checkIn(now: Long) {
         if (now - lastCheckInAt >= checkInMillis) {
-            lastCheckInAt = now
             val jobState = try {
-                db { jobsTable.updateLastCheckIn(jobRecord.id, lastCheckInAt) }
+                jobsTable.updateLastCheckIn(jobId, now, executionToken)
             } catch (e: SQLException) {
                 throw OnCheckInSqlException(e)
             }
@@ -85,9 +86,16 @@ internal class DispatchContext(
                 throw JobNotFoundException(jobRecord.id)
             } else if (jobState.terminated) {
                 throw TerminatedStateException(jobState)
+            } else if (jobState != org.tekfive.keep.job.JobState.RUNNING) {
+                throw JobOwnershipLostException(jobId)
             }
+            lastCheckInAt = now
         }
     }
 
-
+    private fun throwOwnershipLost(): Nothing {
+        val current = jobsTable.findById(jobId) ?: throw JobNotFoundException(jobId)
+        if (current.state.terminated) throw TerminatedStateException(current.state)
+        throw JobOwnershipLostException(jobId)
+    }
 }

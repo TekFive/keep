@@ -37,7 +37,8 @@ internal class JobTimeoutMonitor(
                 databaseGatekeeper {
                     // Commit the timeout and application cleanup together so failures can retry.
                     db {
-                        val timedOutJob = jobsTable.tryMarkTimedOut(jobRecord.id, timeout.cutoffAt, now, failureDetails, timeout.reason)
+                        val timedOutJob = jobsTable.tryMarkTimedOut(jobRecord.id, timeout.cutoffAt, now, failureDetails, timeout.reason,
+                            jobRecord.executionToken)
                             ?: return@db
                         spec.onJobTimedOut(timedOutJob, now, timeout.seconds, timeout.reason)
                     }

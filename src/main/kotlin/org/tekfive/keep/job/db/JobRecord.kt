@@ -44,6 +44,10 @@ class JobRecord(
     var processedCount: Long? = null,
     var failedCount: Long? = null,
     var totalCount: Long? = null,
+    /** Changes every time a worker captures this record, including after a requeue. */
+    val executionToken: UUID? = null,
+    /** Durable request to create a retry with this minimum start time. Null means no request. */
+    val retryAt: Long? = null,
 ) : Data() {
     init {
         validateJobCounts(processedCount, failedCount, totalCount)
@@ -51,5 +55,6 @@ class JobRecord(
 
     // The pinned JFK serializer needs UUID values converted explicitly.
     override fun toJsonObject(): JsonObject =
-        toJsonObjectExcluding(JobRecord::runId) + mapOf("runId" to runId.toString())
+        toJsonObjectExcluding(JobRecord::runId, JobRecord::executionToken) +
+            mapOf("runId" to runId.toString(), "executionToken" to executionToken?.toString())
 }

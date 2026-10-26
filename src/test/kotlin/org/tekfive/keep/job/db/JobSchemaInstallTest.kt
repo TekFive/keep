@@ -14,13 +14,14 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 private const val JOB_SCHEMA = "keep_job_install_test"
 
 private object JobInstallSchema : AppSchema(JOB_SCHEMA) {
-    override val tables = listOf(JobRecordsTable, JobRecordLogsTable, JobStateTransitionsTable)
+    override val tables = listOf(JobRecordsTable, JobHeartbeatsTable, JobRecordLogsTable, JobStateTransitionsTable)
     override val sequences = listOf("globalid")
 }
 
@@ -58,6 +59,7 @@ class JobSchemaInstallTest {
                 "job_records_pending_priority_created_idx",
                 "job_records_type_state_idx",
                 "job_records_run_id_idx",
+                "job_records_retry_pending_idx",
                 "job_record_logs_job_record_id_ix",
                 "job_state_transitions_job_record_id_ix",
             )
@@ -96,12 +98,22 @@ class JobSchemaInstallTest {
                         (7, 'orphan', 7, 0, 5, 3, 6, FALSE, NULL, NULL),
                         (8, 'different-type', 8, 0, 2, 3, 1, FALSE, NULL, NULL),
                         (9, 'cycle', 9, 0, 1, 3, 10, FALSE, NULL, NULL),
-                        (10, 'cycle', 10, 0, 1, 3, 9, FALSE, NULL, NULL)
+                        (10, 'cycle', 10, 0, 1, 3, 9, FALSE, NULL, NULL),
+                        (11, 'running', 11, 0, 1, 2, NULL, FALSE, NULL, NULL)
                 """.trimIndent())
+                statement.execute("UPDATE job_records SET started_at = 90, last_checkin_at = 100 WHERE id = 11")
                 statement.execute(javaClass.getResource("/migrations/job-reporting.sql")!!.readText())
                 statement.execute(javaClass.getResource("/migrations/job-state-transitions.sql")!!.readText())
+                statement.execute(javaClass.getResource("/migrations/job-execution-safety.sql")!!.readText())
             }
 
+            val migratedRunning = JobRecordsTable.getById(11)
+            assertNotNull(migratedRunning.executionToken)
+            assertEquals(100L, JobRecordsTable.getRunningJobs(listOf("running")).single().lastCheckInAt)
+            exec("SELECT count(*) FROM job_heartbeats WHERE job_record_id = 11 AND last_checkin_at = 100") { rs ->
+                assertTrue(rs.next())
+                assertEquals(1, rs.getInt(1))
+            }
             val original = JobRecordsTable.getById(1)
             assertEquals(JobTrigger.user("user-a"), original.trigger)
             assertEquals("Temporary failure", original.resultSummary)
@@ -135,7 +147,7 @@ class JobSchemaInstallTest {
             }
             val remaining = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
             // The legacy SQL has older ID defaults and constraints unrelated to reporting.
-            val reportingObjects = Regex("\\b(trigger_source|trigger_user_id|subject_type|subject_id|result_summary|application_version|run_id|timeout_reason|tenant_id|processed_count|failed_count|total_count|job_records_run_id_idx|job_records_scheduled_chain_type_uq|record_job_state_transition|job_records_record_state_transition)\\b")
+            val reportingObjects = Regex("\\b(execution_token|retry_at|job_heartbeats|job_records_retry_pending_idx|trigger_source|trigger_user_id|subject_type|subject_id|result_summary|application_version|run_id|timeout_reason|tenant_id|processed_count|failed_count|total_count|job_records_run_id_idx|job_records_scheduled_chain_type_uq|record_job_state_transition|job_records_record_state_transition)\\b")
             assertTrue(remaining.sqlStatements.none { reportingObjects.containsMatchIn(it) },
                 "Reporting columns and indexes must match the declared schema: $remaining")
         }

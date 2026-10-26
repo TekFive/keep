@@ -1421,7 +1421,7 @@ and update calls that previously supplied `userId` or `scheduledJob`.
 
 #### Job state history
 
-Include `JobStateTransitionsTable` alongside `JobRecordsTable` and `JobRecordLogsTable` in
+Include `JobStateTransitionsTable` alongside `JobRecordsTable`, `JobHeartbeatsTable`, and `JobRecordLogsTable` in
 `KeepSchema.tables`. Its PostgreSQL trigger records the initial state on insertion and every
 subsequent state change, including direct SQL changes. Updates that leave the state unchanged
 (such as check-ins or progress updates) do not add entries. The state update and history insert
@@ -1456,6 +1456,22 @@ always moved out of `RUNNING` before its dispatcher moves on: failures in job co
 execution become `FAILED` records, and a job interrupted by `stop()` or a dispatcher scale-down is
 returned to `PENDING` so it runs again.
 
+Each capture gets a new `executionToken`. Worker writes check this token, so an older execution
+cannot change the state, details, progress, or heartbeat of a recaptured job. Business operations
+outside KEEP still need their own idempotency guarantees. Copies start as `PENDING`, link their
+`parentJobId` to the original, and keep the same logical `runId`.
+
+Retry requests are saved in `retryAt` in the same transaction as the failure. The dispatcher queues
+the retry immediately, and coordinators recover outstanding requests after errors or restarts.
+Clearing the request and inserting the retry commit together, preventing duplicate retries.
+Retries inherit the last committed details and existing runtime estimate; optional runtime
+estimation cannot prevent retry creation. Pending retry requests reserve their scheduled chain
+and are excluded from record cleanup.
+
+All captures of a job type coordinate their concurrency checks. Keyed and unlimited jobs also
+respect any running job's type-wide limit; separate keys can still run together when no global
+limit prevents it.
+
 `systemIdentifier` must be unique to one running process. On `start()` the coordinator returns
 any `RUNNING` record that carries its own identifier and started before the coordinator did back to
 `PENDING`, on the assumption that the previous process died without finishing it. Set
@@ -1465,6 +1481,17 @@ identifier.
 Heartbeat check-ins are throttled to at most half the effective timeout, even
 when a job overrides the global limit. A one-second timeout permits check-ins
 every 500 milliseconds. Jobs still need to call `checkIn()` often enough.
+
+Include `JobHeartbeatsTable` in `KeepSchema.tables` when using jobs. Check-ins commit on a separate
+connection against this table, even while a business transaction holds the job record locked.
+`job_records.last_checkin_at` is a best-effort mirror while running and is refreshed on completion;
+`getRunningJobs()` reads the current heartbeat. Timeout sweeps skip locked job records and recheck
+on a later poll, so an open business transaction can delay timeout handling.
+
+Existing installations must apply [the execution-safety migration](src/main/resources/migrations/job-execution-safety.sql)
+after the reporting and state-history migrations, in a transaction with the job schema on the
+search path and old workers stopped. It adds `execution_token`, `retry_at`, heartbeat storage,
+and the retry-aware scheduled-chain index. Fresh `jobs.sql` installations include these changes.
 
 Records left `RUNNING` by another process are recovered by timeout detection.
 `timeoutSeconds` limits time without a check-in. `maxRuntimeSeconds` limits elapsed
@@ -1501,7 +1528,8 @@ raised by `checkIn()`, so catch specific exception types or rethrow `JobResult` 
 
 #### Job record retention
 
-`JobRecordCleaner` deletes terminal job records and their logs based on the time the job ended:
+`JobRecordCleaner` deletes terminal job records and their logs based on the time the job ended.
+The database also deletes those records' state-transition history through its foreign key:
 
 | Setting | Default | Applies to |
 | --- | --- | --- |
@@ -1541,7 +1569,7 @@ val response = PatientsQuery(request.parameters).toJsonObject()
 ```kotlin
 object PatientSchema : AppSchema() {
     override val extensions = listOf(KeepSchema.CITEXT)
-    override val tables = listOf(PatientsTable, JobRecordsTable, LocksTable)
+    override val tables = listOf(PatientsTable, JobRecordsTable, JobHeartbeatsTable, LocksTable)
 }
 
 db {

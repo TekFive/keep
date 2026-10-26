@@ -39,6 +39,7 @@ class JobCoordinator(
     @Volatile
     private var orphanReclaimPending: Boolean = false
 
+    private val lifecycleLock = Any()
     private val wakeSignal = Semaphore(0)
 
     private val candidateQueue = LinkedBlockingQueue<Pair<Long, JobSpec>>()
@@ -54,7 +55,7 @@ class JobCoordinator(
         jobsTable = JobRecordsTable,
     )
 
-    fun start() {
+    fun start() = synchronized(lifecycleLock) {
         if (coordinationThread?.let { it.isAlive } != true) {
             startedAt = System.currentTimeMillis()
             orphanReclaimPending = configuration.reclaimOrphanedJobsOnStart
@@ -72,13 +73,14 @@ class JobCoordinator(
     }
 
     fun stop(waitForStop: Boolean = false) {
-        val thread = coordinationThread
-        coordinationThread = null
+        val (thread, dispatchers) = synchronized(lifecycleLock) {
+            val thread = coordinationThread
+            coordinationThread = null
+            val snapshot = this.dispatchers.toList()
+            this.dispatchers.clear()
+            thread to snapshot
+        }
         thread?.interrupt()
-
-        val dispatchers = dispatchers.toList()
-        this.dispatchers.clear()
-
         dispatchers.forEach { it.interrupt() }
 
         if (waitForStop) {
@@ -112,6 +114,8 @@ class JobCoordinator(
                 adjustDispatchersIfNecessary()
 
                 timeoutMonitor.sweep()
+
+                recoverRetries()
 
                 scheduleJobs()
 
@@ -158,6 +162,20 @@ class JobCoordinator(
                 systemIdentifier,
                 requeued.joinToString { "${it.type}#${it.id}" },
             )
+        }
+    }
+
+    private fun recoverRetries() {
+        val candidates = databaseGatekeeper { JobRecordsTable.getRetryCandidates(registry.jobTypeIds) }
+        for (jobId in candidates) {
+            try {
+                databaseGatekeeper { JobRecordsTable.enqueueRetry(jobId) }
+            } catch (e: SQLException) {
+                databaseGatekeeper.onSQLException(e)
+                log.warn("Unable to recover retry for job {}; its request remains saved.", jobId, e)
+            } catch (e: Exception) {
+                log.warn("Unable to recover retry for job {}; its request remains saved.", jobId, e)
+            }
         }
     }
 
@@ -235,7 +253,8 @@ class JobCoordinator(
         }
     }
 
-    private fun adjustDispatchersIfNecessary() {
+    private fun adjustDispatchersIfNecessary() = synchronized(lifecycleLock) {
+        if (!isOwner()) return@synchronized
         val dead = dispatchers.filter { !it.isAlive }
         if (dead.isNotEmpty()) {
             dispatchers.removeAll(dead.toSet())
@@ -246,14 +265,16 @@ class JobCoordinator(
             var delta = configuration.dispatchCount - dispatchers.size
             if (delta > 0) {
                 for (i in 1 .. delta) {
-                    dispatchers.add(Dispatcher(
+                    val dispatcher = Dispatcher(
                         configuration,
                         candidateQueue,
                         dispatchers,
                         databaseGatekeeper,
                         JobRecordsTable,
                         systemIdentifier,
-                    ).apply { start() })
+                    )
+                    dispatchers.add(dispatcher)
+                    dispatcher.start()
                 }
             } else {
                 while (delta < 0) {

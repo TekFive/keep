@@ -4,6 +4,7 @@ import org.tekfive.keep.json.query.QueryNode
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.isNotNull
 import org.jetbrains.exposed.v1.core.lessEq
 import org.jetbrains.exposed.v1.core.or
@@ -85,7 +86,7 @@ class JobRecordCleaner : Job {
         while (true) {
             val batch = db {
                 val purgeIds = JobRecordsTable.select(JobRecordsTable.id).where {
-                    JobRecordsTable.endedAt.isNotNull() and (
+                    JobRecordsTable.retryAt.isNull() and JobRecordsTable.endedAt.isNotNull() and (
                         ((JobRecordsTable.state eq JobState.COMPLETED) and (JobRecordsTable.endedAt lessEq completedCutoffAt)) or
                             ((JobRecordsTable.state inList failedStates) and (JobRecordsTable.endedAt lessEq failedCutoffAt))
                     )
