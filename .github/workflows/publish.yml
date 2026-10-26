@@ -10,6 +10,7 @@ name: publish
 # sibling libs) can resolve it with their own GITHUB_TOKEN.
 on:
   workflow_dispatch: {}
+  workflow_call: {}
 
 permissions:
   contents: read

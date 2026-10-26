@@ -84,6 +84,13 @@ Generate a jar:
 ./gradlew jar
 ```
 
+To release and publish, open **Actions → release-and-publish → Run workflow** in
+GitHub. The workflow uses the version in `build.gradle.kts`, runs the tests,
+creates the GitHub release and version tag, verifies publication on JitPack,
+then publishes to GitHub Packages. Publishing to GitHub Packages runs only if
+the release workflow succeeds. The separate `release` and `publish` workflows
+can also be run manually.
+
 ## Major Features
 
 ### Audited UUID tables
