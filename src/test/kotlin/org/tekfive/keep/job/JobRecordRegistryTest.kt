@@ -3,7 +3,7 @@ package org.tekfive.keep.job
 import org.junit.jupiter.api.Test
 import org.tekfive.jfk.JsonObject
 import org.junit.jupiter.api.assertThrows
-import org.tekfive.keep.job.db.QueryNode
+import org.tekfive.keep.json.query.QueryNode
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

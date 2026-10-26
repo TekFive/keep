@@ -1,11 +1,11 @@
-package org.tekfive.keep.job.db
+package org.tekfive.keep.json.query
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 class QueryNodeTest {
 
-    private val col = "job_details"
+    private val col = "details"
 
     @Test
     fun `Condition delegates to operator SQL`() {

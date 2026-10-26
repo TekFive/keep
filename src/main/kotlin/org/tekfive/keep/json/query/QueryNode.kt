@@ -1,4 +1,4 @@
-package org.tekfive.keep.job.db
+package org.tekfive.keep.json.query
 
 import java.sql.PreparedStatement
 import java.util.concurrent.atomic.AtomicInteger

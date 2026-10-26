@@ -1,5 +1,6 @@
 package org.tekfive.keep.job.db
 
+import org.tekfive.keep.json.query.QueryNode
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList

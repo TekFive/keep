@@ -5,7 +5,7 @@ import org.tekfive.jfk.JsonObject
 import org.tekfive.keep.job.*
 import org.tekfive.keep.job.db.DatabaseGatekeeper
 import org.tekfive.keep.job.db.JobRecordsTable
-import org.tekfive.keep.job.db.QueryNode
+import org.tekfive.keep.json.query.QueryNode
 import org.tekfive.keep.job.db.TestJobConfiguration
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.reflect.KClass

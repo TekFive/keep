@@ -2,7 +2,7 @@ package org.tekfive.keep.job
 
 import org.tekfive.jfk.JsonObject
 import org.tekfive.keep.job.db.JobRecord
-import org.tekfive.keep.job.db.QueryNode
+import org.tekfive.keep.json.query.QueryNode
 import kotlin.reflect.KClass
 
 interface JobSpec {

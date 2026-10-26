@@ -12,7 +12,7 @@ import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.job.db.PostgresTestSupport
-import org.tekfive.keep.job.db.QueryNode
+import org.tekfive.keep.json.query.QueryNode
 import org.tekfive.keep.job.schedule.FixedIntervalJobSpec
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container

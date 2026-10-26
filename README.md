@@ -255,6 +255,11 @@ For a `List<JsonObject>` property, `val items = column(Model::items)` stores the
 JSONB array and reads it back as `List<JsonObject>`. Nullable lists are also supported;
 no `FromJsonObject` converter is needed.
 
+JSONB predicate trees use `JsonPathOperator`, `QueryNode`, and `LogicalOperator` from
+`org.tekfive.keep.json.query`. They generate PostgreSQL JSONB predicates and bind path keys and
+values through JDBC. Applications using the former `org.tekfive.keep.job.db` imports must update
+those imports and rebuild.
+
 Composite properties can use an existing `ColumnGroup` with
 `val address = column(LocationData::address, AddressColumnGroup(this))`. The overload returns
 the concrete group, so individual columns remain accessible (for example, `address.city`).

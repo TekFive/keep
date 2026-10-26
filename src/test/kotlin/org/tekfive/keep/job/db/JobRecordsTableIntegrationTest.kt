@@ -1,5 +1,7 @@
 package org.tekfive.keep.job.db
 
+import org.tekfive.keep.json.query.QueryNode
+import org.tekfive.keep.json.query.JsonPathOperator
 import org.junit.jupiter.api.AfterAll
 import org.tekfive.jfk.JsonObject
 import org.tekfive.jfk.toJsonObject

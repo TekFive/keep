@@ -1,4 +1,4 @@
-package org.tekfive.keep.job.db
+package org.tekfive.keep.json.query
 
 import java.sql.PreparedStatement
 import java.util.concurrent.atomic.AtomicInteger
@@ -14,7 +14,7 @@ sealed interface JsonPathOperator {
             is GT -> "($targetField)::numeric > ?"
             is LTE -> "($targetField)::numeric <= ?"
             is LT -> "($targetField)::numeric < ?"
-            is Equals -> "$targetField = ?"
+            is Equals -> if (value is Number) "($targetField)::numeric = ?" else "$targetField = ?"
             is Contains -> "($targetField)::jsonb ?? ?"
         }
     }

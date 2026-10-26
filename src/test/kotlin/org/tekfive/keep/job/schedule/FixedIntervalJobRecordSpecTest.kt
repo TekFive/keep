@@ -7,7 +7,7 @@ import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobResult
 import org.tekfive.keep.job.JobState
 import org.tekfive.keep.job.JobCompleted
-import org.tekfive.keep.job.db.QueryNode
+import org.tekfive.keep.json.query.QueryNode
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull

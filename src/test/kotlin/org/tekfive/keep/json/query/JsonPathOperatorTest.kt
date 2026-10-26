@@ -1,4 +1,4 @@
-package org.tekfive.keep.job.db
+package org.tekfive.keep.json.query
 
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows

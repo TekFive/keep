@@ -19,7 +19,7 @@ import org.tekfive.keep.data.UuidData
 import org.tekfive.keep.data.UuidDataTable
 import org.tekfive.keep.data.column
 import org.tekfive.keep.db.dbConnection
-import org.tekfive.keep.job.db.JsonPathOperator
+import org.tekfive.keep.json.query.JsonPathOperator
 import org.tekfive.keep.migration.dynamic.CreateIndex
 import org.tekfive.keep.migration.dynamic.DropIndex
 import org.tekfive.keep.migration.dynamic.PostgresMigrationGenerator
