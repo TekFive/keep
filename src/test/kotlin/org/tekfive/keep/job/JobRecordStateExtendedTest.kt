@@ -20,6 +20,7 @@ class JobRecordStateExtendedTest {
     @Test
     fun `waitingStates does not contain RUNNING`() {
         assertFalse(JobState.waitingStates.contains(JobState.RUNNING))
+        assertFalse(JobState.waitingStates.contains(JobState.CANCEL_REQUESTED))
     }
 
     @Test
@@ -51,6 +52,7 @@ class JobRecordStateExtendedTest {
     fun `terminatedStates does not contain non-terminated states`() {
         assertFalse(JobState.terminatedStates.contains(JobState.PENDING))
         assertFalse(JobState.terminatedStates.contains(JobState.RUNNING))
+        assertFalse(JobState.terminatedStates.contains(JobState.CANCEL_REQUESTED))
     }
 
     @Test
@@ -63,7 +65,7 @@ class JobRecordStateExtendedTest {
         for (state in JobState.entries) {
             val isWaiting = JobState.waitingStates.contains(state)
             val isTerminated = state.terminated
-            val isRunning = state == JobState.RUNNING
+            val isRunning = state in JobState.runningStates
             assertTrue(
                 isWaiting || isTerminated || isRunning,
                 "$state should be waiting, running, or terminated"
@@ -81,5 +83,6 @@ class JobRecordStateExtendedTest {
         assertEquals("Timed Out", JobState.TIMED_OUT.displayName)
         assertEquals("Need User Input", JobState.WAITING.displayName)
         assertEquals("Unknown", JobState.UNKNOWN.displayName)
+        assertEquals("Cancel Requested", JobState.CANCEL_REQUESTED.displayName)
     }
 }

@@ -34,20 +34,22 @@ CREATE TABLE IF NOT EXISTS job_records (
     failed_count BIGINT,
     total_count BIGINT,
     execution_token UUID,
-    retry_at BIGINT
+    retry_at BIGINT,
+    cancel_requested_by_user_id TEXT,
+    cancel_requested_at BIGINT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_running_type_lock_key_uq
     ON job_records (type, lock_key)
-    WHERE state = 2 AND lock_key IS NOT NULL;
+    WHERE state IN (2, 9) AND lock_key IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS job_records_running_concurrency_scope_idx
     ON job_records (type, concurrency_key)
-    WHERE state = 2 AND max_concurrent_jobs IS NOT NULL;
+    WHERE state IN (2, 9) AND max_concurrent_jobs IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS job_records_scheduled_chain_type_uq
     ON job_records (type)
-    WHERE trigger_source = 3 AND (state IN (1, 2) OR retry_at IS NOT NULL);
+    WHERE trigger_source = 3 AND (state IN (1, 2, 9) OR retry_at IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS job_records_pending_priority_created_idx
     ON job_records (priority DESC, created_at)
@@ -94,7 +96,9 @@ CREATE TABLE IF NOT EXISTS job_state_transitions (
     timeout_reason INT,
     processed_count BIGINT,
     failed_count BIGINT,
-    total_count BIGINT
+    total_count BIGINT,
+    cancel_requested_by_user_id TEXT,
+    cancel_requested_at BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS job_state_transitions_job_record_id_ix
@@ -107,17 +111,17 @@ AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         EXECUTE format(
-            'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10)',
+            'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count, cancel_requested_by_user_id, cancel_requested_at) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
             TG_TABLE_SCHEMA, format('%I.globalid', TG_TABLE_SCHEMA)
-        ) USING NEW.id, NULL::integer, NEW.state, NEW.system_identifier, NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count;
+        ) USING NEW.id, NULL::integer, NEW.state, NEW.system_identifier, NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count, NEW.cancel_requested_by_user_id, NEW.cancel_requested_at;
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF OLD.state IS DISTINCT FROM NEW.state THEN
             EXECUTE format(
-                'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10)',
+                'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count, cancel_requested_by_user_id, cancel_requested_at) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
                 TG_TABLE_SCHEMA, format('%I.globalid', TG_TABLE_SCHEMA)
-            ) USING NEW.id, OLD.state, NEW.state, COALESCE(NEW.system_identifier, OLD.system_identifier), NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count;
+            ) USING NEW.id, OLD.state, NEW.state, COALESCE(NEW.system_identifier, OLD.system_identifier), NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count, NEW.cancel_requested_by_user_id, NEW.cancel_requested_at;
         END IF;
         RETURN NEW;
     END IF;

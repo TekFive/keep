@@ -10,6 +10,8 @@ internal class JobNotFoundException(val jobId: Long) : JobEndedException("A job 
 }
 internal class TerminatedStateException(val state: JobState) : JobEndedException("Job has been set to terminated state: $state")
 
+internal class CancellationRequestedException(val jobId: Long) : JobEndedException("Cancellation requested for job $jobId.")
+
 internal class JobOwnershipLostException(val jobId: Long) : JobEndedException("Job $jobId is no longer owned by this execution.")
 
 internal class OnCheckInSqlException(val sqlException: SQLException) : Exception(sqlException)

@@ -6,6 +6,7 @@ import org.tekfive.keep.job.db.JobRecordLogLevel
 import org.tekfive.keep.job.JobContext
 import org.tekfive.keep.job.JobLogger
 import org.tekfive.keep.job.JobSpec
+import org.tekfive.keep.job.JobState
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.Job
@@ -84,9 +85,11 @@ internal class DispatchContext(
             }
             if (jobState == null) {
                 throw JobNotFoundException(jobRecord.id)
+            } else if (jobState == JobState.CANCEL_REQUESTED) {
+                throw CancellationRequestedException(jobId)
             } else if (jobState.terminated) {
                 throw TerminatedStateException(jobState)
-            } else if (jobState != org.tekfive.keep.job.JobState.RUNNING) {
+            } else if (jobState != JobState.RUNNING) {
                 throw JobOwnershipLostException(jobId)
             }
             lastCheckInAt = now

@@ -12,10 +12,13 @@ enum class JobState(override val id: Int, override val displayName: String, val 
     TIMED_OUT(6, "Timed Out", true),
     WAITING(7, "Need User Input", true),
     UNKNOWN(8, "Unknown", true),
+    CANCEL_REQUESTED(9, "Cancel Requested", false),
     ;
 
     companion object : DataEnumColumnType<JobState>() {
-        val waitingStates = dataEnumValues.filter { !it.terminated && it != RUNNING }
+        val waitingStates = listOf(PENDING)
+        /** Executions that still own their worker and concurrency slot. */
+        val runningStates = listOf(RUNNING, CANCEL_REQUESTED)
         val terminatedStates = dataEnumValues.filter { it.terminated }
     }
 }

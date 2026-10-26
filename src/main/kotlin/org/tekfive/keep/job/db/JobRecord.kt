@@ -48,6 +48,10 @@ class JobRecord(
     val executionToken: UUID? = null,
     /** Durable request to create a retry with this minimum start time. Null means no request. */
     val retryAt: Long? = null,
+    /** First cancellation requester; null identifies a system request when cancelRequestedAt is set. */
+    val cancelRequestedByUserId: String? = null,
+    /** Retained even if the job finishes normally before observing the request. */
+    val cancelRequestedAt: Long? = null,
 ) : Data() {
     init {
         validateJobCounts(processedCount, failedCount, totalCount)

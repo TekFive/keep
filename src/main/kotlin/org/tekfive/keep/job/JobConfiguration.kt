@@ -36,6 +36,7 @@ interface JobConfiguration {
      * [JobState.PENDING]. Such records were orphaned by a crash or an unclean shutdown. This
      * requires the system identifier to be unique to one running process; disable it when several
      * processes share an identifier.
+     * Orphaned [JobState.CANCEL_REQUESTED] executions become [JobState.CANCELLED].
      */
     val reclaimOrphanedJobsOnStart: Boolean
         get() = true

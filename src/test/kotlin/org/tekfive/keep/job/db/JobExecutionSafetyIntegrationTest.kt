@@ -176,7 +176,7 @@ class JobExecutionSafetyIntegrationTest {
         assertFailsWith<JobOwnershipLostException> { old.updateProgress(processedCount = 99) }
         assertFailsWith<JobOwnershipLostException> { old.updateDetails(mapOf("stale" to true).toJsonObject()) }
         assertFailsWith<JobOwnershipLostException> { old.checkIn(old.startedAt + 2_000) }
-        for (result in listOf(ExecuteJobResultType.SUCCESS, ExecuteJobResultType.INTERRUPTED, ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED)) {
+        for (result in listOf(ExecuteJobResultType.SUCCESS, ExecuteJobResultType.INTERRUPTED, ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED, ExecuteJobResultType.CANCELLED)) {
             dispatcher().finalizeJob(ExecuteJobResult(result), old, spec)
             assertEquals(JobState.RUNNING, load(id).state)
         }

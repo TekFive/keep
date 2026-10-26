@@ -31,6 +31,8 @@ object JobStateTransitionsTable : DataTable<JobStateTransition>("job_state_trans
     val processedCount = long("processed_count").nullable()
     val failedCount = long("failed_count").nullable()
     val totalCount = long("total_count").nullable()
+    val cancelRequestedByUserId = text("cancel_requested_by_user_id").nullable()
+    val cancelRequestedAt = long("cancel_requested_at").nullable()
 
     override val postgresObjects = JobRecordsTable.postgresObjects {
         rowTrigger("job_records_record_state_transition", functionName = "record_job_state_transition") {
@@ -57,8 +59,8 @@ object JobStateTransitionsTable : DataTable<JobStateTransition>("job_state_trans
     // Qualify both objects using the triggering table's schema, independent of the caller's search path.
     private fun recordTransitionSql(fromState: String, systemIdentifier: String): String = """
         EXECUTE format(
-            'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10)',
+            'INSERT INTO %I.job_state_transitions (id, job_record_id, from_state, to_state, transitioned_at, system_identifier, application_version, result_summary, timeout_reason, processed_count, failed_count, total_count, cancel_requested_by_user_id, cancel_requested_at) VALUES (nextval(%L::regclass), $1, $2, $3, floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
             TG_TABLE_SCHEMA, format('%I.globalid', TG_TABLE_SCHEMA)
-        ) USING NEW.id, ${fromState}, NEW.state, ${systemIdentifier}, NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count;
+        ) USING NEW.id, ${fromState}, NEW.state, ${systemIdentifier}, NEW.application_version, NEW.result_summary, NEW.timeout_reason, NEW.processed_count, NEW.failed_count, NEW.total_count, NEW.cancel_requested_by_user_id, NEW.cancel_requested_at;
     """.trimIndent()
 }

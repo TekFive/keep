@@ -158,6 +158,8 @@ internal class Dispatcher(
             } else {
                 ExecuteJobResult(ExecuteJobResultType.FAILED, e.sqlException.message)
             }
+        } catch (e: CancellationRequestedException) {
+            return ExecuteJobResult(ExecuteJobResultType.CANCELLED)
         } catch (e: JobEndedException) {
             log.info("Job {} ended externally: {}", dispatchContext.jobRecord.id, e.message)
             return ExecuteJobResult(ExecuteJobResultType.ALREADY_TERMINATED)
@@ -196,6 +198,9 @@ internal class Dispatcher(
 
         when (result.type) {
             ExecuteJobResultType.ALREADY_TERMINATED -> {}
+            ExecuteJobResultType.CANCELLED -> {
+                markEnded(JobState.CANCELLED)
+            }
             ExecuteJobResultType.SUCCESS -> {
                 markEnded(JobState.COMPLETED)
             }
@@ -270,5 +275,6 @@ internal enum class ExecuteJobResultType {
     FAILED_BUT_RETRY_IF_ALLOWED,
     NEED_USER_INPUT,
     ALREADY_TERMINATED,
+    CANCELLED,
     INTERRUPTED,
 }

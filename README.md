@@ -39,7 +39,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.1.0")
+implementation("com.github.TekFive:keep:v1.1.1")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. The local Maven repository is checked first, allowing a locally published artifact with the same JitPack coordinates to override a remote artifact.
@@ -1466,7 +1466,8 @@ prevents the state change from committing.
 
 Each `JobStateTransition` contains the job record ID, nullable `fromState`, `toState`, and
 `transitionedAt` in epoch milliseconds, plus the worker, application version, result summary,
-timeout reason, and counts at that transition. Initial entries have a null `fromState`.
+timeout reason, counts, and cancellation requester/time at that transition. Initial entries
+have a null `fromState`.
 Requeues retain the worker and counts from the interrupted execution in history even when a
 later capture resets the job record's progress. Each retry has its own initial entry.
 
@@ -1483,6 +1484,40 @@ also install the table and trigger when `JobStateTransitionsTable` is declared. 
 installation; previous transitions cannot be reconstructed. Deleting a job cascades to its
 history, so longer-term reporting still requires a retention policy or archive.
 
+#### Canceling jobs
+
+Request cancellation of one job attempt:
+
+```kotlin
+val requested = JobRecordsTable.requestCancellation(jobId, userId = "operator-42")
+```
+
+A pending job becomes `CANCELLED` immediately. A running job becomes
+`CANCEL_REQUESTED` and keeps its concurrency slot and lock key until execution ends.
+On its next database check-in, `context.checkIn()` throws a termination exception;
+let that exception propagate so the dispatcher records `CANCELLED` and `endedAt`.
+Check-ins still use the configured minimum check-in interval. Cancellation is
+cooperative: it does not forcibly interrupt the worker or undo external effects.
+
+If the job finishes before observing the request, its normal result wins:
+`COMPLETED`, `FAILED`, or `WAITING`, including its usual failure retry policy.
+Progress and details can still be saved while cancellation is requested. Timeouts
+also remain active. Shutdown and restart recovery finish outstanding cancellation
+requests instead of requeueing those executions.
+
+`cancelRequestedByUserId` and `cancelRequestedAt` record the first requester and
+request time, including in state history. Omit `userId` for a system request. These
+fields remain available even if the job finishes normally; `state` tells whether
+it was actually canceled. Copies and retries start with no cancellation request.
+The method returns `false` for a missing, terminal, or already-requested job and
+does not replace the first request's attribution. Canceling one scheduled occurrence
+does not disable its recurring schedule.
+
+Existing installations must apply [the cancellation migration](src/main/resources/migrations/job-cancellation.sql)
+after `job-execution-safety.sql`, once in a transaction with the job schema on the
+search path. Stop old workers before upgrading: they do not recognize the new state.
+Fresh `jobs.sql` installations and generated schemas include these changes.
+
 #### Resilience
 
 The coordination thread guards every polling cycle: a scheduled spec that throws while computing
@@ -1490,7 +1525,8 @@ its next run, a job factory that fails, or an `Error` thrown by a job is logged 
 retried on the next poll. Dispatcher threads that exit are replaced automatically. A captured job is
 always moved out of `RUNNING` before its dispatcher moves on: failures in job construction or
 execution become `FAILED` records, and a job interrupted by `stop()` or a dispatcher scale-down is
-returned to `PENDING` so it runs again.
+returned to `PENDING` so it runs again, unless cancellation was requested, in which
+case it becomes `CANCELLED`.
 
 Each capture gets a new `executionToken`. Worker writes check this token, so an older execution
 cannot change the state, details, progress, or heartbeat of a recaptured job. Business operations

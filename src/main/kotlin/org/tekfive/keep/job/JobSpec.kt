@@ -54,6 +54,7 @@ interface JobSpec {
     /**
      * When true, the framework guarantees at most one job of this type
      * is in RUNNING state at any time, regardless of lock key or job details.
+     * A CANCEL_REQUESTED execution still holds this slot until it ends.
      * Other jobs of this type remain in WAITING_FOR_START until
      * the running instance completes.
      */
@@ -62,6 +63,7 @@ interface JobSpec {
 
     /**
      * Maximum number of jobs of this type allowed to be in RUNNING state at once.
+     * Includes CANCEL_REQUESTED jobs until they end.
      *
      * When a job record also has a concurrency key, the limit applies to jobs with the
      * same type and key. Without a key, the limit applies to all jobs of this type.

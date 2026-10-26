@@ -18,6 +18,7 @@ class JobRecordStateTest {
         assertEquals(JobState.TIMED_OUT, JobState.map(6))
         assertEquals(JobState.WAITING, JobState.map(7))
         assertEquals(JobState.UNKNOWN, JobState.map(8))
+        assertEquals(JobState.CANCEL_REQUESTED, JobState.map(9))
     }
 
     @Test
@@ -34,6 +35,7 @@ class JobRecordStateTest {
     fun `non-terminated states`() {
         assertFalse(JobState.PENDING.terminated)
         assertFalse(JobState.RUNNING.terminated)
+        assertFalse(JobState.CANCEL_REQUESTED.terminated)
     }
 
     @Test

@@ -42,6 +42,7 @@ interface JobContext {
     val hasMoreRetries: Boolean
         get() = attempt <= maxRetries
 
+    /** Observes cancellation on database check-ins; allow the termination exception to propagate. */
     fun checkIn(now: Long = System.currentTimeMillis())
 
     fun updateDetails(details: JsonObject)

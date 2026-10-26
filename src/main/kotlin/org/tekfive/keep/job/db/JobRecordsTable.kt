@@ -79,14 +79,18 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val totalCount = long("total_count").nullable()
     val executionToken = javaUUID("execution_token").nullable()
     val retryAt = long("retry_at").nullable()
+    val cancelRequestedByUserId = text("cancel_requested_by_user_id").nullable()
+    val cancelRequestedAt = long("cancel_requested_at").nullable()
+
+    private val runningStateIds = JobState.runningStates.joinToString(", ") { it.id.toString() }
 
     override val postgresObjects = postgresObjects {
         index("job_records_running_type_lock_key_uq", type, lockKey, unique = true,
-            predicate = SqlExpression("state = ${JobState.RUNNING.id} AND lock_key IS NOT NULL"))
+            predicate = SqlExpression("state IN ($runningStateIds) AND lock_key IS NOT NULL"))
         index("job_records_running_concurrency_scope_idx", type, concurrencyKey,
-            predicate = SqlExpression("state = ${JobState.RUNNING.id} AND max_concurrent_jobs IS NOT NULL"))
+            predicate = SqlExpression("state IN ($runningStateIds) AND max_concurrent_jobs IS NOT NULL"))
         index("job_records_scheduled_chain_type_uq", type, unique = true,
-            predicate = SqlExpression("trigger_source = ${JobTriggerSource.SCHEDULE.id} AND (state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id}) OR retry_at IS NOT NULL)"))
+            predicate = SqlExpression("trigger_source = ${JobTriggerSource.SCHEDULE.id} AND (state IN (${JobState.PENDING.id}, $runningStateIds) OR retry_at IS NOT NULL)"))
         index("job_records_pending_priority_created_idx", listOf(priority.indexKey(SortOrder.DESC), createdAt.indexKey()),
             predicate = SqlExpression("state = ${JobState.PENDING.id}"))
         index("job_records_type_state_idx", type, state)
@@ -96,6 +100,30 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
     fun launchCopy(copy: JobRecord, now: Long = System.currentTimeMillis()): JobRecord =
         create(copyForExecution(copy, now))
+
+    /**
+     * Cancels pending work immediately, or asks its current worker to stop at a check-in.
+     * A null [userId] identifies a system request. The first request's attribution is retained.
+     * Returns false for a missing, terminal, or already-requested job. This cancels one attempt,
+     * not its recurring schedule. A running job may still finish with its normal outcome.
+     */
+    fun requestCancellation(jobId: Long, userId: String? = null): Boolean = db {
+        val now = DbConnection.transactionAt
+        dbConnection().prepareStatement("""
+            UPDATE $tableName
+            SET state = CASE WHEN state = ${JobState.PENDING.id} THEN ${JobState.CANCELLED.id}
+                             ELSE ${JobState.CANCEL_REQUESTED.id} END,
+                ended_at = CASE WHEN state = ${JobState.PENDING.id} THEN ? ELSE ended_at END,
+                cancel_requested_by_user_id = ?, cancel_requested_at = ?, retry_at = NULL
+            WHERE id = ? AND state IN (${JobState.PENDING.id}, ${JobState.RUNNING.id})
+        """.trimIndent()).use { statement ->
+            statement.setLong(1, now)
+            statement.setString(2, userId)
+            statement.setLong(3, now)
+            statement.setLong(4, jobId)
+            statement.executeUpdate() > 0
+        }
+    }
 
     private fun copyForExecution(copy: JobRecord, now: Long, minimumStartAt: Long? = null): JobRecord =
         JobRecord(
@@ -136,6 +164,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
      *   type when the candidate has no [concurrencyKey]).
      *
      * Limits held by running jobs also apply when the candidate falls within their scope.
+     * Jobs in [JobState.CANCEL_REQUESTED] keep their concurrency slot until execution ends.
      * A candidate's null [maxConcurrentJobs] leaves its spec-level check to [tryCaptureRunLock].
      *
      * [excludeIds] removes already-known ids (for example, ids the caller has queued) from the
@@ -166,7 +195,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 OR NOT EXISTS (
                     SELECT 1
                     FROM $tableName lock_holder
-                    WHERE lock_holder.state = ${JobState.RUNNING.id}
+                    WHERE lock_holder.state IN ($runningStateIds)
                     AND lock_holder.type = candidate.type
                     AND lock_holder.lock_key = candidate.lock_key
                 )
@@ -176,19 +205,19 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 OR candidate.max_concurrent_jobs > (
                     SELECT COUNT(*)
                     FROM $tableName scope_member
-                    WHERE scope_member.state = ${JobState.RUNNING.id}
+                    WHERE scope_member.state IN ($runningStateIds)
                     AND scope_member.type = candidate.type
                     AND (candidate.concurrency_key IS NULL OR scope_member.concurrency_key = candidate.concurrency_key)
                 )
             )
             AND NOT EXISTS (
                 SELECT 1 FROM $tableName holder
-                WHERE holder.type = candidate.type AND holder.state = ${JobState.RUNNING.id}
+                WHERE holder.type = candidate.type AND holder.state IN ($runningStateIds)
                 AND holder.max_concurrent_jobs IS NOT NULL
                 AND (holder.concurrency_key IS NULL OR holder.concurrency_key = candidate.concurrency_key)
                 AND holder.max_concurrent_jobs <= (
                     SELECT COUNT(*) FROM $tableName member
-                    WHERE member.type = candidate.type AND member.state = ${JobState.RUNNING.id}
+                    WHERE member.type = candidate.type AND member.state IN ($runningStateIds)
                     AND (holder.concurrency_key IS NULL OR member.concurrency_key = holder.concurrency_key)
                 )
             )
@@ -226,7 +255,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
         return db {
             leftJoin(JobHeartbeatsTable).select(columns + JobHeartbeatsTable.columns).where {
-                (state eq JobState.RUNNING) and (type inList jobTypeIds)
+                (state inList JobState.runningStates) and (type inList jobTypeIds)
             }.map { row ->
                 map(row).also { job ->
                     if (row.getOrNull(JobHeartbeatsTable.executionToken) == job.executionToken) {
@@ -337,7 +366,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             val maxConcurrentJobs = jobRecord.maxConcurrentJobs ?: spec.maxConcurrentJobs
             require(maxConcurrentJobs == null || maxConcurrentJobs > 0) { "Max concurrent jobs must be greater than 0." }
             val running = select(this@JobRecordsTable.maxConcurrentJobs, concurrencyKey).where {
-                (type eq jobRecord.type) and (state eq JobState.RUNNING)
+                (type eq jobRecord.type) and (state inList JobState.runningStates)
             }.toList()
             val countsByKey = running.groupingBy { it[concurrencyKey] }.eachCount()
             fun countInScope(key: String?): Int = if (key == null) running.size else countsByKey[key] ?: 0
@@ -353,7 +382,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             val concurrencyPredicate: Op<Boolean>? = if (jobRecord.lockKey != null) {
                 val lockKey = jobRecord.lockKey
                 notExists(select(id).where {
-                    (type eq spec.jobTypeIdentifier) and (state eq JobState.RUNNING) and (this@JobRecordsTable.lockKey eq lockKey)
+                    (type eq spec.jobTypeIdentifier) and (state inList JobState.runningStates) and (this@JobRecordsTable.lockKey eq lockKey)
                 })
             } else {
                 null
@@ -435,7 +464,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                     (id eq jobRecordId) and (JobHeartbeatsTable.executionToken eq executionToken)
                 }.singleOrNull()?.get(JobHeartbeatsTable.lastCheckInAt)
             update({
-                runningExecution(jobRecordId, expectedExecutionToken)
+                activeExecution(jobRecordId, expectedExecutionToken)
             }) { statement ->
                 if (heartbeatAt != null) statement[lastCheckInAt] = heartbeatAt
                 statement[this@JobRecordsTable.endedAt] = endedAt
@@ -470,7 +499,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         val activityAt = if (reason == JobTimeoutReason.MAX_RUNTIME) job.startedAt else latestCheckIn ?: job.startedAt
         if (activityAt == null || activityAt > cutoffAt) return@db null
 
-        updateReturning(where = { runningExecution(jobRecordId, expectedExecutionToken) }) { statement ->
+        updateReturning(where = { activeExecution(jobRecordId, expectedExecutionToken) }) { statement ->
             statement[this@JobRecordsTable.endedAt] = endedAt
             statement[state] = JobState.TIMED_OUT
             statement[this@JobRecordsTable.failureDetails] = failureDetails
@@ -481,25 +510,33 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     }
 
     private fun lockRunningJob(jobId: Long): Boolean = dbConnection().prepareStatement(
-        "SELECT id FROM $tableName WHERE id = ? AND state = ${JobState.RUNNING.id} FOR UPDATE SKIP LOCKED"
+        "SELECT id FROM $tableName WHERE id = ? AND state IN ($runningStateIds) FOR UPDATE SKIP LOCKED"
     ).use { statement ->
         statement.setLong(1, jobId)
         statement.executeQuery().use { it.next() }
     }
 
-    private fun runningExecution(jobId: Long, expectedExecutionToken: UUID?): Op<Boolean> {
-        val running = (id eq jobId) and (state eq JobState.RUNNING)
+    private fun activeExecution(jobId: Long, expectedExecutionToken: UUID?): Op<Boolean> {
+        val running = (id eq jobId) and (state inList JobState.runningStates)
         return if (expectedExecutionToken == null) running else running and (executionToken eq expectedExecutionToken)
     }
 
     /**
      * Returns a [JobState.RUNNING] record to [JobState.PENDING] so another dispatcher can pick it
      * up. Used when a dispatcher was interrupted before the job could complete.
+     * An outstanding cancellation is completed instead and returns false (not requeued).
      */
     internal fun tryRequeue(jobRecordId: Long, expectedExecutionToken: UUID? = null): Boolean {
         return db {
+            val job = selectAll().where { activeExecution(jobRecordId, expectedExecutionToken) }
+                .forUpdate().singleOrNull()?.let(::map) ?: return@db false
+            if (job.state == JobState.CANCEL_REQUESTED) {
+                tryMarkEnded(jobRecordId, DbConnection.transactionAt, JobState.CANCELLED,
+                    expectedExecutionToken = expectedExecutionToken)
+                return@db false
+            }
             update({
-                runningExecution(jobRecordId, expectedExecutionToken)
+                activeExecution(jobRecordId, expectedExecutionToken)
             }) { statement ->
                 statement[this@JobRecordsTable.state] = JobState.PENDING
                 statement[this@JobRecordsTable.systemIdentifier] = null
@@ -513,21 +550,18 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
      * Returns every [JobState.RUNNING] record owned by [systemIdentifier] that started before
      * [startedBefore] to [JobState.PENDING]. A record matching both conditions cannot have a live
      * dispatcher behind it as long as [systemIdentifier] is unique to one running process.
+     * Orphaned cancellation requests become [JobState.CANCELLED] instead of restarting.
      */
     internal fun requeueOrphanedRunningJobs(systemIdentifier: String, startedBefore: Long): List<JobRecord> {
         return db {
-            updateReturning(
-                where = {
-                    (state eq JobState.RUNNING) and
-                        (this@JobRecordsTable.systemIdentifier eq systemIdentifier) and
-                        (startedAt.isNotNull()) and (startedAt lessEq startedBefore)
-                }
-            ) { statement ->
-                statement[this@JobRecordsTable.state] = JobState.PENDING
-                statement[this@JobRecordsTable.systemIdentifier] = null
-                statement[startedAt] = null
-                statement[lastCheckInAt] = null
-            }.map(::map)
+            val orphans = selectAll().where {
+                (state inList JobState.runningStates) and
+                    (this@JobRecordsTable.systemIdentifier eq systemIdentifier) and
+                    (startedAt.isNotNull()) and (startedAt lessEq startedBefore)
+            }.forUpdate().map(::map)
+            orphans.mapNotNull { job ->
+                if (tryRequeue(job.id, job.executionToken)) getById(job.id) else null
+            }
         }
     }
 
@@ -576,7 +610,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
 
     internal fun updateJobDetails(jobId: Long, details: JsonObject, expectedExecutionToken: UUID? = null): Boolean {
         return db {
-            update({ if (expectedExecutionToken == null) id eq jobId else runningExecution(jobId, expectedExecutionToken) }) { statement ->
+            update({ if (expectedExecutionToken == null) id eq jobId else activeExecution(jobId, expectedExecutionToken) }) { statement ->
                 statement[jobDetails] = details
             } > 0
         }
@@ -586,7 +620,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     internal fun updateProgress(jobId: Long, processedCount: Long?, failedCount: Long?, totalCount: Long?, expectedExecutionToken: UUID? = null): Boolean {
         validateJobCounts(processedCount, failedCount, totalCount)
         return db {
-            update({ runningExecution(jobId, expectedExecutionToken) }) { statement ->
+            update({ activeExecution(jobId, expectedExecutionToken) }) { statement ->
                 statement[this@JobRecordsTable.processedCount] = processedCount
                 statement[this@JobRecordsTable.failedCount] = failedCount
                 statement[this@JobRecordsTable.totalCount] = totalCount
@@ -634,7 +668,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 // transaction, nor for a timeout transaction that is locking the heartbeat.
                 connection.prepareStatement("""
                     WITH unlocked AS (
-                        SELECT id FROM $tableName WHERE id = ? AND state = ${JobState.RUNNING.id}
+                        SELECT id FROM $tableName WHERE id = ? AND state IN ($runningStateIds)
                         AND execution_token = ? FOR UPDATE SKIP LOCKED
                     )
                     UPDATE $tableName job SET last_checkin_at = GREATEST(job.last_checkin_at, ?)

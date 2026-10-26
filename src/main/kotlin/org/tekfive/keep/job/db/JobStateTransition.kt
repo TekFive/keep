@@ -18,4 +18,6 @@ class JobStateTransition(
     val processedCount: Long?,
     val failedCount: Long?,
     val totalCount: Long?,
+    val cancelRequestedByUserId: String? = null,
+    val cancelRequestedAt: Long? = null,
 ) : Data()
