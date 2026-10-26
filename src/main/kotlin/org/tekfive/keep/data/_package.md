@@ -11,6 +11,7 @@ can declare their table beside a record as its companion object.
 | `IdentifiedData`, `Data`, `UuidData` | Hold record identity and the baseline used to detect changed values. |
 | `TypedDataTuple`, `DataTuple`, `UuidDataTuple` | Map constructor properties and query rows. |
 | `DataTable`, `UuidDataTable` | Insert, selectively update, and delete records with long or UUID IDs. |
+| `SingletonDataTable` | Enforce at most one row and provide singleton lookup and concurrent initialization. |
 | `ColumnGroup` and property column helpers | Bind one property to a column or a group of columns. |
 | `DataView`, `UuidDataView` | Map read-only database views. |
 | Table and tuple caches | Cache records with the configured lifetime and lookup behavior. |

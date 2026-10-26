@@ -131,6 +131,35 @@ patient.displayName = "Ada Byron"
 PatientsTable.update(patient)
 ```
 
+For application settings or other data that should have at most one row, extend
+`SingletonDataTable` using an ordinary `Data` class:
+
+```kotlin
+class AppSettings(var maintenanceMode: Boolean) : Data() {
+    companion object : SingletonDataTable<AppSettings>("app_settings") {
+        val maintenanceMode = bool("maintenance_mode")
+    }
+}
+
+val settings = AppSettings.getOrCreate { AppSettings(maintenanceMode = false) }
+settings.maintenanceMode = true
+AppSettings.update(settings)
+
+val current = AppSettings.get()       // Throws if the table is empty.
+val optional = AppSettings.find()     // Returns null if the table is empty.
+```
+
+The table retains normal Long IDs, CRUD operations, property mapping, and change tracking.
+A PostgreSQL unique index enforces the one-row limit even for concurrent inserts, bulk inserts,
+and direct SQL. `create` rejects a second row; `getOrCreate` safely returns the winning row when
+multiple callers initialize concurrently under the default READ COMMITTED isolation. Its factory
+should only construct data, since multiple callers can evaluate it. Deletion is allowed and makes
+the table empty again.
+
+Include the singleton table in your schema as usual. `SchemaUtils`, `AppSchema`, fresh-install
+scripts, and dynamic migrations all install the limit. Converting an existing table requires
+resolving any extra rows before applying the unique index; migrations do not choose a row to keep.
+
 To customize inherited reads, override `createQuery()` in a tuple, table, view, or an intermediate
 base class. For example, this table's lookup methods only return active patients:
 
