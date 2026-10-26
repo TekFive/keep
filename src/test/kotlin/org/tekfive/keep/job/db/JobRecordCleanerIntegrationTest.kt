@@ -178,6 +178,7 @@ class JobRecordCleanerIntegrationTest {
             assertEquals(1, countLogs("retained-$state"))
         }
         assertEquals(JobState.terminatedStates.size, countAllLogs())
+        assertEquals(JobState.terminatedStates.size, count("SELECT count(*) FROM job_state_transitions", null))
     }
 
     @Test
@@ -203,6 +204,7 @@ class JobRecordCleanerIntegrationTest {
         assertEquals(5, countRecords("recent-completed"))
         assertEquals(5, countLogs("recent-completed"))
         assertEquals(5, countAllLogs())
+        assertEquals(5, count("SELECT count(*) FROM job_state_transitions", null))
         assertTrue(
             context.checkIns >= 2,
             "Expected a check-in between batches of ${JobRecordCleaner.PURGE_BATCH_SIZE}, got ${context.checkIns}",

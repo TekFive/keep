@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
 private const val JOB_SCHEMA = "keep_job_install_test"
 
 private object JobInstallSchema : AppSchema(JOB_SCHEMA) {
-    override val tables = listOf(JobRecordsTable, JobRecordLogsTable)
+    override val tables = listOf(JobRecordsTable, JobRecordLogsTable, JobStateTransitionsTable)
     override val sequences = listOf("globalid")
 }
 
@@ -59,6 +59,7 @@ class JobSchemaInstallTest {
                 "job_records_type_state_idx",
                 "job_records_run_id_idx",
                 "job_record_logs_job_record_id_ix",
+                "job_state_transitions_job_record_id_ix",
             )
         ), "Missing indexes, found: $indexNames")
 
@@ -69,6 +70,8 @@ class JobSchemaInstallTest {
         )
         transaction(database) {
             exec("SET LOCAL search_path TO $JOB_SCHEMA, public")
+            exec("INSERT INTO job_records (id, type, created_at, priority, attempt, state) VALUES (1000, 'history', 1, 0, 1, 1)")
+            assertEquals(1, JobStateTransitionsTable.getForJob(1000).size)
             val plan = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
             assertTrue(plan.isEmpty, "Job indexes must be preserved by dynamic migrations: $plan")
         }
@@ -96,6 +99,7 @@ class JobSchemaInstallTest {
                         (10, 'cycle', 10, 0, 1, 3, 9, FALSE, NULL, NULL)
                 """.trimIndent())
                 statement.execute(javaClass.getResource("/migrations/job-reporting.sql")!!.readText())
+                statement.execute(javaClass.getResource("/migrations/job-state-transitions.sql")!!.readText())
             }
 
             val original = JobRecordsTable.getById(1)
@@ -116,6 +120,12 @@ class JobSchemaInstallTest {
             assertNull(original.processedCount)
             assertNull(original.failedCount)
             assertNull(original.totalCount)
+            assertTrue(JobStateTransitionsTable.getForJob(1).isEmpty(), "Migration must not invent earlier transitions")
+            exec("INSERT INTO job_records (id, type, created_at, priority, attempt, state) VALUES (1000, 'history', 1, 0, 1, 1)")
+            exec("SET LOCAL search_path TO public")
+            exec("UPDATE $JOB_SCHEMA.job_records SET state = 2 WHERE id = 1000")
+            exec("SET LOCAL search_path TO $JOB_SCHEMA, public")
+            assertEquals(listOf(1, 2), JobStateTransitionsTable.getForJob(1000).map { it.toState.id })
             exec("""
                 SELECT count(*) FROM information_schema.columns
                 WHERE table_schema = '$JOB_SCHEMA' AND table_name = 'job_records' AND column_name IN ('user_id', 'scheduled_job')
@@ -125,7 +135,7 @@ class JobSchemaInstallTest {
             }
             val remaining = PostgresMigrationGenerator.plan(JobInstallSchema, nonDestructive = true)
             // The legacy SQL has older ID defaults and constraints unrelated to reporting.
-            val reportingObjects = Regex("\\b(trigger_source|trigger_user_id|subject_type|subject_id|result_summary|application_version|run_id|timeout_reason|tenant_id|processed_count|failed_count|total_count|job_records_run_id_idx|job_records_scheduled_chain_type_uq)\\b")
+            val reportingObjects = Regex("\\b(trigger_source|trigger_user_id|subject_type|subject_id|result_summary|application_version|run_id|timeout_reason|tenant_id|processed_count|failed_count|total_count|job_records_run_id_idx|job_records_scheduled_chain_type_uq|record_job_state_transition|job_records_record_state_transition)\\b")
             assertTrue(remaining.sqlStatements.none { reportingObjects.containsMatchIn(it) },
                 "Reporting columns and indexes must match the declared schema: $remaining")
         }

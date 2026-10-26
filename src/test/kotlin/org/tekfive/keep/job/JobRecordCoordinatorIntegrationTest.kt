@@ -11,6 +11,7 @@ import org.tekfive.ack.sources.MapSource
 import org.tekfive.keep.db.DbConnection
 import org.tekfive.keep.db.db
 import org.tekfive.keep.job.db.JobRecordsTable
+import org.tekfive.keep.job.db.JobStateTransitionsTable
 import org.tekfive.keep.job.db.PostgresTestSupport
 import org.tekfive.keep.json.query.QueryNode
 import org.tekfive.keep.job.schedule.FixedIntervalJobSpec
@@ -350,6 +351,13 @@ class JobRecordCoordinatorIntegrationTest {
                         assertEquals(10L, retry["processed_count"])
                         assertEquals(0L, retry["failed_count"])
                         assertEquals(10L, retry["total_count"])
+                        val history = JobStateTransitionsTable.getForRun(contexts[0].runId!!)
+                        assertEquals(listOf(JobState.PENDING, JobState.RUNNING, JobState.FAILED,
+                            JobState.PENDING, JobState.RUNNING, JobState.COMPLETED), history.map { it.toState })
+                        assertEquals(3L, history[2].processedCount)
+                        assertEquals(10L, history.last().processedCount)
+                        assertEquals("test-app-v1", history[2].applicationVersion)
+                        assertEquals("test-app-v2", history.last().applicationVersion)
                     }
                 }
             }

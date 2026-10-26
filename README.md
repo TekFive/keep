@@ -1419,6 +1419,34 @@ summaries copied from `failure_details`. A generated schema diff alone cannot pe
 Fresh installations can use `jobs.sql` or the schema generators. Rebuild consuming applications
 and update calls that previously supplied `userId` or `scheduledJob`.
 
+#### Job state history
+
+Include `JobStateTransitionsTable` alongside `JobRecordsTable` and `JobRecordLogsTable` in
+`KeepSchema.tables`. Its PostgreSQL trigger records the initial state on insertion and every
+subsequent state change, including direct SQL changes. Updates that leave the state unchanged
+(such as check-ins or progress updates) do not add entries. The state update and history insert
+share a transaction: rollbacks leave neither change committed, and a failed history insert
+prevents the state change from committing.
+
+Each `JobStateTransition` contains the job record ID, nullable `fromState`, `toState`, and
+`transitionedAt` in epoch milliseconds, plus the worker, application version, result summary,
+timeout reason, and counts at that transition. Initial entries have a null `fromState`.
+Requeues retain the worker and counts from the interrupted execution in history even when a
+later capture resets the job record's progress. Each retry has its own initial entry.
+
+```kotlin
+val attemptHistory = JobStateTransitionsTable.getForJob(jobId)
+val runHistory = JobStateTransitionsTable.getForRun(runId)
+```
+
+Both return entries ordered by transition time and then history ID. Fresh `jobs.sql` installs
+history automatically. Existing installations must apply
+[the state-history migration](src/main/resources/migrations/job-state-transitions.sql) after the
+reporting migration, in a transaction with the job schema on the search path. Schema generators
+also install the table and trigger when `JobStateTransitionsTable` is declared. History starts at
+installation; previous transitions cannot be reconstructed. Deleting a job cascades to its
+history, so longer-term reporting still requires a retention policy or archive.
+
 #### Resilience
 
 The coordination thread guards every polling cycle: a scheduled spec that throws while computing

@@ -11,6 +11,7 @@ import org.tekfive.keep.db.db
 import org.tekfive.keep.job.db.DatabaseGatekeeper
 import org.tekfive.keep.job.db.JobRecord
 import org.tekfive.keep.job.db.JobRecordsTable
+import org.tekfive.keep.job.db.JobStateTransitionsTable
 import org.tekfive.keep.job.db.PostgresTestSupport
 import org.tekfive.keep.job.dispatch.DispatchContext
 import org.tekfive.jfk.json
@@ -260,6 +261,7 @@ class JobTimeoutMonitorIntegrationTest {
         assertNull(pending.resultSummary)
         assertNull(pending.timeoutReason)
         assertNull(pending.jobDetails)
+        assertEquals(listOf(JobState.PENDING, JobState.RUNNING), JobStateTransitionsTable.getForJob(jobId).map { it.toState })
 
         // Retry must survive losing all in-memory monitor state.
         val restarted = monitor(10, spec)
@@ -269,6 +271,9 @@ class JobTimeoutMonitorIntegrationTest {
         assertEquals(2, attempts)
         assertEquals(JobState.TIMED_OUT, load(jobId).state)
         assertEquals(JobTimeoutReason.HEARTBEAT, load(jobId).timeoutReason)
+        val history = JobStateTransitionsTable.getForJob(jobId)
+        assertEquals(listOf(JobState.PENDING, JobState.RUNNING, JobState.TIMED_OUT), history.map { it.toState })
+        assertEquals(JobTimeoutReason.HEARTBEAT, history.last().timeoutReason)
         assertEquals(true, load(jobId).jobDetails?.get("cleaned")?.boolean)
     }
 
