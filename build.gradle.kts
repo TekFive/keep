@@ -42,9 +42,12 @@ dependencies {
     api("com.zaxxer:HikariCP:7.0.2")
     api("com.google.crypto.tink:tink:1.17.0")
     api("org.bouncycastle:bcprov-jdk18on:1.84")
-    api("com.github.TekFive:jfk:55b9e2676e")
+    api("com.github.TekFive:jfk:v1.0.10")
     api("com.github.TekFive:ack:v1.0.0")
-    api("com.github.TekFive:kviash:v1.0.0")
+    api("com.github.TekFive:kviash:v1.0.0") {
+        // KEEP supplies JFK explicitly; KViash still references an older commit hash.
+        exclude(group = "com.github.TekFive", module = "jfk")
+    }
 
     compileOnly("org.postgresql:postgresql:42.7.11")
 
