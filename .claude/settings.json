@@ -1,0 +1,16 @@
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false,
+  "enabledPlugins": {
+    "frontend-design@anthropic-plugin-directory": true,
+    "code-review@anthropic-plugin-directory": true,
+    "code-simplifier@anthropic-plugin-directory": true
+  },
+  "outputStyle": "unslopped"
+}
