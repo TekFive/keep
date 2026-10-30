@@ -97,6 +97,18 @@ JobRecordsTable.insertJob(
 
 Job records support priority ordering, minimum start times, retry policies, lock keys, concurrency limits, scheduled jobs, timeout detection, and average-runtime estimation using JSON path filters over previous job details.
 
+A spec with `estimateRuntime = true` (the default) gets a runtime estimate in
+`estimatedRuntimeSeconds`. `insertJob` makes the estimate when its
+`maxEstimatedRuntimeRecords` argument is positive (it defaults to 0). A child job reuses its
+parent's estimate. Otherwise the estimate is the average runtime of that many recent completed
+runs of the type. When the job has details, the queries from `getEstimatedRuntimeQueries` are tried
+first. When there are no details, or no query matches a completed run, all completed runs of the
+type are used. A job that has no estimate when a worker captures it, such as a scheduled run or a
+record created without `insertJob`, gets one at that point from the same calculation, using
+`maxEstimatedRuntimeRecords` from the `JobConfiguration` (`JOB_MAX_ESTIMATED_RUNTIME_RECORDS`,
+default 10; 0 disables it). An existing estimate is never replaced. The estimate stays null
+until the type has a completed run, and a failed estimate never stops the job from running.
+
 Calling `coordinator.wakeUp()` after inserting a job ends the current poll wait early, so the new
 job is dispatched without waiting for `pollSeconds` to elapse.
 

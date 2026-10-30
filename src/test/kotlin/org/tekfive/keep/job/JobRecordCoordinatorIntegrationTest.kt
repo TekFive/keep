@@ -1000,6 +1000,62 @@ class JobRecordCoordinatorIntegrationTest {
         }
     }
     @Test
+    fun `scheduled job receives a runtime estimate from the configuration when it starts`() {
+        val typeId = "scheduled-estimate"
+        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
+            conn.prepareStatement(
+                "INSERT INTO job_records (type, created_at, priority, attempt, state, started_at, ended_at) VALUES (?, 1000, 0, 1, ?, 1000, ?)"
+            ).use { stmt ->
+                for (runtimeSeconds in listOf(20L, 40L)) {
+                    stmt.setString(1, typeId)
+                    stmt.setInt(2, JobState.COMPLETED.id)
+                    stmt.setLong(3, 1000L + runtimeSeconds * 1000L)
+                    stmt.executeUpdate()
+                }
+            }
+        }
+
+        val seenEstimate = CopyOnWriteArrayList<Int?>()
+        val latch = CountDownLatch(1)
+        val spec = object : FixedIntervalJobSpec {
+            override val jobTypeIdentifier = typeId
+            override val jobDescription = "Scheduled test job with runtime estimation."
+            override val intervalSeconds = 3_600L
+            override val runImmediatelyOnFirstSchedule = true
+            override fun createJob(): Job = object : Job {
+                override fun execute(context: JobContext): JobResult {
+                    seenEstimate.add(context.estimatedRuntimeSeconds)
+                    latch.countDown()
+                    return JobCompleted()
+                }
+            }
+        }
+
+        val registry = JobRegistry().apply { register(spec) }
+        val coordinator = JobCoordinator("test-system", registry, createConfig(dispatchCount = 1, maxEstimatedRuntimeRecords = 10))
+        coordinator.start()
+
+        try {
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "Scheduled job did not execute within timeout")
+            assertEquals(listOf<Int?>(30), seenEstimate.toList())
+            DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { conn ->
+                conn.prepareStatement(
+                    "SELECT estimated_run_time_seconds FROM job_records WHERE type = ? AND trigger_source = ? ORDER BY id LIMIT 1"
+                ).use { stmt ->
+                    stmt.setString(1, typeId)
+                    stmt.setInt(2, JobTriggerSource.SCHEDULE.id)
+                    stmt.executeQuery().use { rs ->
+                        assertTrue(rs.next(), "Expected the scheduled job record")
+                        assertEquals(30, rs.getInt(1))
+                    }
+                }
+            }
+        } finally {
+            coordinator.stop(waitForStop = true)
+        }
+    }
+
+    @Test
     fun `all dispatchers start and execute work without waiting for another poll`() {
         val workerCount = 8
         val started = CountDownLatch(workerCount)

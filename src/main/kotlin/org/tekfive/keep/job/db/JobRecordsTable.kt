@@ -269,6 +269,10 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     /**
      * Queues a job, inheriting its parent's trigger, subject, tenant, and run ID unless overridden.
      * Independent jobs receive a new run ID. Use [JobTrigger.system] to clear inherited user attribution.
+     * When [spec] estimates runtime and [maxEstimatedRuntimeRecords] is positive, the parent's estimate
+     * is reused, or one is averaged from that many recent completed runs of the type, filtered first by
+     * [JobSpec.getEstimatedRuntimeQueries] when [details] exist. A job queued without an estimate
+     * receives one when it starts, using [org.tekfive.keep.job.JobConfiguration.maxEstimatedRuntimeRecords].
      */
     fun insertJob(
         spec: JobSpec,
@@ -290,18 +294,8 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     ): Long {
         var estimatedRuntimeSeconds: Int? = null
         if (spec.estimateRuntime && maxEstimatedRuntimeRecords > 0) {
-            if (parentJobContext?.estimatedRuntimeSeconds != null) {
-                estimatedRuntimeSeconds = parentJobContext.estimatedRuntimeSeconds
-            } else if (details != null) {
-                val queries = spec.getEstimatedRuntimeQueries(details)
-                for (query in queries) {
-                    estimatedRuntimeSeconds = getAverageRuntimeSecs(spec.jobTypeIdentifier, maxEstimatedRuntimeRecords, query)
-                    if (estimatedRuntimeSeconds != null) break
-                }
-                if (estimatedRuntimeSeconds == null) {
-                    estimatedRuntimeSeconds = getAverageRuntimeSecs(spec.jobTypeIdentifier, maxEstimatedRuntimeRecords, null)
-                }
-            }
+            estimatedRuntimeSeconds = parentJobContext?.estimatedRuntimeSeconds
+                ?: estimateRuntimeSeconds(spec, details, maxEstimatedRuntimeRecords)
         }
 
         val resolvedLockKey = lockKey
@@ -432,6 +426,42 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 }
             }
         }
+    }
+
+    /**
+     * Gives a captured job without a runtime estimate one, averaged over the last [maxRecords]
+     * completed runs of its type. This covers scheduled jobs and any other record created without
+     * [insertJob]. An existing estimate is never replaced, and the update is fenced to the captured
+     * execution. Returns the job's estimate, which stays null when the type has no completed runs.
+     */
+    internal fun tryEstimateRuntime(jobRecord: JobRecord, spec: JobSpec, maxRecords: Int): Int? {
+        if (jobRecord.estimatedRuntimeSeconds != null || !spec.estimateRuntime || maxRecords <= 0) {
+            return jobRecord.estimatedRuntimeSeconds
+        }
+        return db {
+            val estimate = estimateRuntimeSeconds(spec, jobRecord.jobDetails, maxRecords) ?: return@db null
+            val updated = update({
+                activeExecution(jobRecord.id, jobRecord.executionToken) and estimatedRuntimeSeconds.isNull()
+            }) { statement ->
+                statement[estimatedRuntimeSeconds] = estimate
+            } > 0
+            if (updated) jobRecord.estimatedRuntimeSeconds = estimate
+            jobRecord.estimatedRuntimeSeconds
+        }
+    }
+
+    /**
+     * Averages the runtime of the last [maxRecords] completed jobs of [spec]'s type. With [details],
+     * the spec's detail-based queries are tried in order first. Without details, or when none of
+     * those queries matches a completed job, every completed job of the type is averaged.
+     */
+    private fun estimateRuntimeSeconds(spec: JobSpec, details: JsonObject?, maxRecords: Int): Int? {
+        if (details != null) {
+            for (query in spec.getEstimatedRuntimeQueries(details)) {
+                getAverageRuntimeSecs(spec.jobTypeIdentifier, maxRecords, query)?.let { return it }
+            }
+        }
+        return getAverageRuntimeSecs(spec.jobTypeIdentifier, maxRecords, null)
     }
 
     private fun captureConcurrencyScopeLock(scope: String) {

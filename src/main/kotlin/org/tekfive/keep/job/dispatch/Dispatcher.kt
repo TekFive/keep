@@ -66,6 +66,7 @@ internal class Dispatcher(
         var result = ExecuteJobResult(ExecuteJobResultType.INTERRUPTED)
         var fatal: VirtualMachineError? = null
         try {
+            estimateRuntime(jobRecord, jobSpec)
             val job = jobSpec.createJob()
             val context = DispatchContext(
                 jobConfiguration.minSecondsBetweenJobCheckin,
@@ -97,6 +98,23 @@ internal class Dispatcher(
         }
 
         fatal?.let { throw it }
+    }
+
+    /**
+     * Gives a captured job created without a runtime estimate, such as a scheduled run, one before
+     * its context is built. The estimate is optional: a failure is logged and the job runs without it.
+     */
+    private fun estimateRuntime(jobRecord: JobRecord, jobSpec: JobSpec) {
+        try {
+            db { jobsTable.tryEstimateRuntime(jobRecord, jobSpec, jobConfiguration.maxEstimatedRuntimeRecords) }
+        } catch (e: InterruptedException) {
+            throw e
+        } catch (e: SQLException) {
+            databaseGatekeeper.onSQLException(e)
+            log.warn("Unable to estimate the runtime of job {}; it will run without an estimate.", jobRecord.id, e)
+        } catch (e: Exception) {
+            log.warn("Unable to estimate the runtime of job {}; it will run without an estimate.", jobRecord.id, e)
+        }
     }
 
     private fun finalizeCaptured(result: ExecuteJobResult, jobRecord: JobRecord, dispatchContext: DispatchContext?, jobSpec: JobSpec) {

@@ -16,6 +16,10 @@ interface JobConfiguration {
 
     val maximumCandidatesBuffer: Int
 
+    /**
+     * Number of recent completed runs averaged to estimate the runtime of a job that starts without
+     * an estimate, such as a scheduled run. Zero disables these start-time estimates.
+     */
     val maxEstimatedRuntimeRecords: Int
 
     val minSecondsBetweenJobCheckin: Int
