@@ -70,6 +70,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
     val maxRuntimeSeconds = integer("max_runtime_seconds").nullable()
     val subject = JobSubjectColumns(this)
     val resultSummary = text("result_summary").nullable()
+    val result = jsonObject("result").nullable()
     val applicationVersion = text("application_version").nullable()
     val runId = javaUUID("run_id").let { it.defaultExpression(CustomFunction("gen_random_uuid", it.columnType)) }
     val timeoutReason = dataEnum<JobTimeoutReason>("timeout_reason").nullable()
@@ -135,6 +136,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             attempt = copy.attempt + 1,
             estimatedRuntimeSeconds = copy.estimatedRuntimeSeconds,
             state = JobState.PENDING,
+            subject = copy.subject,
             jobDetails = copy.jobDetails,
             systemIdentifier = null,
             startedAt = null,
@@ -146,7 +148,6 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
             concurrencyKey = copy.concurrencyKey,
             timeoutSeconds = copy.timeoutSeconds,
             maxRuntimeSeconds = copy.maxRuntimeSeconds,
-            subject = copy.subject,
             runId = copy.runId,
             tenantId = copy.tenantId,
         )
@@ -324,6 +325,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 attempt = parentJobContext?.let { it.attempt + 1 } ?: 1,
                 estimatedRuntimeSeconds = estimatedRuntimeSeconds,
                 state = JobState.PENDING,
+                subject = subject,
                 jobDetails = details,
                 systemIdentifier = null,
                 startedAt = null,
@@ -340,7 +342,6 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 maxRuntimeSeconds = maxRuntimeSeconds
                     ?: (parentJobContext as? DispatchContext)?.jobRecord?.maxRuntimeSeconds
                     ?: spec.maxRuntimeSeconds,
-                subject = subject,
                 tenantId = tenantId,
                 runId = runId,
             )
@@ -399,6 +400,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                     stmt[this@JobRecordsTable.applicationVersion] = applicationVersion
                     // A requeued record starts its reporting counters again when it is recaptured.
                     stmt[resultSummary] = null
+                    stmt[this@JobRecordsTable.result] = null
                     stmt[timeoutReason] = null
                     stmt[processedCount] = null
                     stmt[failedCount] = null
@@ -484,6 +486,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
         processedCount: Long? = null,
         failedCount: Long? = null,
         totalCount: Long? = null,
+        result: JsonObject? = null,
         expectedExecutionToken: UUID? = null,
         retryAt: Long? = null,
     ): Boolean {
@@ -501,6 +504,7 @@ object JobRecordsTable : DataTable<JobRecord>("job_records") {
                 statement[this@JobRecordsTable.state] = state
                 statement[this@JobRecordsTable.failureDetails] = failureDetails
                 statement[this@JobRecordsTable.resultSummary] = resultSummary
+                statement[this@JobRecordsTable.result] = result
                 statement[this@JobRecordsTable.retryAt] = retryAt
                 if (processedCount != null) statement[this@JobRecordsTable.processedCount] = processedCount
                 if (failedCount != null) statement[this@JobRecordsTable.failedCount] = failedCount

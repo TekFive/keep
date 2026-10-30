@@ -7,6 +7,7 @@ import org.tekfive.keep.job.db.DatabaseGatekeeper
 import org.tekfive.keep.job.db.JobRecord
 import org.tekfive.keep.job.db.JobRecordsTable
 import org.tekfive.keep.db.db
+import org.tekfive.jfk.JsonObject
 import java.sql.SQLException
 import java.util.concurrent.BlockingQueue
 import java.util.concurrent.atomic.AtomicInteger
@@ -147,14 +148,16 @@ internal class Dispatcher(
                         dispatchContext.log.info(result.infoMessage)
                     }
                     ExecuteJobResult(ExecuteJobResultType.SUCCESS, resultSummary = result.infoMessage,
-                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
+                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount,
+                        result = result.result)
                 }
                 is JobWaiting -> {
                     if (!result.infoMessage.isNullOrBlank()) {
                         dispatchContext.log.info(result.infoMessage)
                     }
                     ExecuteJobResult(ExecuteJobResultType.NEED_USER_INPUT, resultSummary = result.infoMessage,
-                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
+                        processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount,
+                        result = result.result)
                 }
                 is JobFailed -> {
                     if (!result.errorMessage.isNullOrBlank()) {
@@ -162,10 +165,12 @@ internal class Dispatcher(
                     }
                     if (result.retryIfAllowed) {
                         ExecuteJobResult(ExecuteJobResultType.FAILED_BUT_RETRY_IF_ALLOWED, result.errorMessage,
-                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
+                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount,
+                            result = result.result)
                     } else {
                         ExecuteJobResult(ExecuteJobResultType.FAILED, result.errorMessage,
-                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount)
+                            processedCount = result.processedCount, failedCount = result.failedCount, totalCount = result.totalCount,
+                            result = result.result)
                     }
                 }
             }
@@ -210,7 +215,7 @@ internal class Dispatcher(
         val executionToken = checkNotNull(jobRecord.executionToken)
         fun markEnded(state: JobState, retryAt: Long? = null): Boolean = db {
             jobsTable.tryMarkEnded(jobRecord.id, endedAt, state, result.failureDetails,
-                result.resultSummary, result.processedCount, result.failedCount, result.totalCount,
+                result.resultSummary, result.processedCount, result.failedCount, result.totalCount, result.result,
                 expectedExecutionToken = executionToken, retryAt = retryAt)
         }
 
@@ -284,6 +289,7 @@ internal class ExecuteJobResult(
     val processedCount: Long? = null,
     val failedCount: Long? = null,
     val totalCount: Long? = null,
+    val result: JsonObject? = null,
 )
 
 internal enum class ExecuteJobResultType {

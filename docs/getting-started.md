@@ -32,7 +32,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.TekFive:keep:v1.1.1")
+    implementation("com.github.TekFive:keep:v1.1.2")
     runtimeOnly("org.postgresql:postgresql:42.7.11")
 }
 

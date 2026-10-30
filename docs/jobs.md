@@ -168,8 +168,10 @@ return JobCompleted("Imported 98 records; 2 failed", processedCount = 100, faile
 `updateProgress` retains omitted counts and clears explicitly null counts. Its writes participate in
 the caller's database transaction and only update a running attempt. `JobCompleted`, `JobWaiting`,
 and `JobFailed` accept final counts; omitted/null final counts preserve the last saved progress.
-Their existing info/error message becomes `resultSummary`. Summary and final counts commit with the
-terminal state. Retries, copies, and recaptures reset outcome fields and counts. Timeouts preserve
+Their existing info/error message becomes `resultSummary`. Each also accepts an optional `result`
+`JsonObject`, whether it is returned or thrown, which is saved as the record's `result`. Summary,
+result, and final counts commit with the terminal state. Other exceptions a job throws leave
+`result` null. Retries, copies, and recaptures reset outcome fields and counts. Timeouts preserve
 saved progress and store `timeoutReason` (`HEARTBEAT` or `MAX_RUNTIME`) along with the timeout summary.
 
 Existing installations must apply [the reporting migration](../src/main/resources/migrations/job-reporting.sql)
@@ -391,6 +393,7 @@ apply only the migrations not yet installed, in this order:
 2. [job-state-transitions.sql](../src/main/resources/migrations/job-state-transitions.sql)
 3. [job-execution-safety.sql](../src/main/resources/migrations/job-execution-safety.sql)
 4. [job-cancellation.sql](../src/main/resources/migrations/job-cancellation.sql)
+5. [job-result.sql](../src/main/resources/migrations/job-result.sql)
 
 Stop old workers, set the job schema on the connection's search path, and run each
 migration once in a transaction. Start the updated application after the schema is

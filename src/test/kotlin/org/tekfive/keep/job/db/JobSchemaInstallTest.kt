@@ -112,6 +112,7 @@ class JobSchemaInstallTest {
                 statement.execute(javaClass.getResource("/migrations/job-state-transitions.sql")!!.readText())
                 statement.execute(javaClass.getResource("/migrations/job-execution-safety.sql")!!.readText())
                 statement.execute(javaClass.getResource("/migrations/job-cancellation.sql")!!.readText())
+                statement.execute(javaClass.getResource("/migrations/job-result.sql")!!.readText())
             }
 
             val migratedRunning = JobRecordsTable.getById(11)

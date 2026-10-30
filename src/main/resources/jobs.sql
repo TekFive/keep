@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS job_records (
     subject_type TEXT,
     subject_id TEXT,
     result_summary TEXT,
+    result JSONB,
     application_version TEXT,
     run_id UUID NOT NULL DEFAULT gen_random_uuid(),
     timeout_reason INT,

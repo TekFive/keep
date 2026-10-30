@@ -25,7 +25,7 @@ the database.
 | `JobCoordinator` (JobCoordinator.kt) | The polling loop. It schedules repeating jobs, recovers retries, sweeps timeouts, and queues ready jobs for workers. |
 | `JobConfiguration` (JobConfiguration.kt) | Worker count, poll interval, timeout defaults, and the number of past runs used for runtime estimates. |
 | `JobContext` (JobContext.kt) | What a running job can see and do: its details, estimate, logger, progress, and check-ins. |
-| `JobResult` (JobResult.kt) | How a job ends: completed, waiting for input, or failed. |
+| `JobResult` (JobResult.kt) | How a job ends: completed, waiting for input, or failed, with an optional JSON result saved to the record. |
 | `JobState` (JobState.kt) | The states a job record moves through. |
 | `JobTrigger`, `JobSubject` (JobTrigger.kt, JobSubject.kt) | Who or what started a job, and what it is about, for reporting. |
 | `JobTimeoutMonitor` (JobTimeoutMonitor.kt) | Ends running jobs that stopped checking in or ran too long. |

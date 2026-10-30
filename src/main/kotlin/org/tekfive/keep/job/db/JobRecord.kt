@@ -18,6 +18,7 @@ class JobRecord(
     val attempt: Int,
     var estimatedRuntimeSeconds: Int?,
     var state: JobState,
+    val subject: JobSubject? = null,
     var jobDetails: JsonObject?,
     var systemIdentifier: String?,
     var startedAt: Long?,
@@ -32,8 +33,8 @@ class JobRecord(
     val timeoutSeconds: Int? = null,
     /** Maximum elapsed seconds per attempt. Null inherits; non-positive disables the limit. */
     val maxRuntimeSeconds: Int? = null,
-    val subject: JobSubject? = null,
     var resultSummary: String? = null,
+    var result: JsonObject? = null,
     /** Version of the application that captured this attempt, supplied by JobConfiguration. */
     var applicationVersion: String? = null,
     /** Shared by retries and copies; each newly scheduled run gets a new ID. */

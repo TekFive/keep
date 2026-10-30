@@ -71,7 +71,7 @@ repositories {
 Then add KEEP:
 
 ```kotlin
-implementation("com.github.TekFive:keep:v1.1.1")
+implementation("com.github.TekFive:keep:v1.1.2")
 ```
 
 KEEP resolves its ACK, JFK, and KViash dependencies from JitPack. When building KEEP

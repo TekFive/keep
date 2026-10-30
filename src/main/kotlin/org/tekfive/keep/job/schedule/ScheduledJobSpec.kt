@@ -38,6 +38,7 @@ interface ScheduledJobSpec : JobSpec {
             attempt = 1,
             estimatedRuntimeSeconds = null,
             state = JobState.PENDING,
+            subject = subject,
             jobDetails = jobDetails,
             systemIdentifier = null,
             startedAt = null,
@@ -48,7 +49,6 @@ interface ScheduledJobSpec : JobSpec {
             lockKey = lockKey,
             maxConcurrentJobs = resolvedMaxConcurrentJobs,
             concurrencyKey = concurrencyKey,
-            subject = subject,
             tenantId = tenantId,
         )
     }
